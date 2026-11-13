@@ -1,0 +1,7 @@
+# run outputs and local state
+ka_run_*/
+seen.json
+
+# python
+__pycache__/
+.pytest_cache/
