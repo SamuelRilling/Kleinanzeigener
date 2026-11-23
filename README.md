@@ -19,7 +19,7 @@ Double-click `launch.bat` (or `python deals.py` for a console run with `search.t
 | Settings | `search.toml` as fields: home, budget, price range, request limits, search terms. **Save and start search**. |
 | Selection rules | What passes: price basis (list / effective), DDR4 floor, VRAM minimum, Intel, pickup-only, scam signals, fix costs, PSU wattage, under/overpriced thresholds. Each rule shows how many listings it drops. **Save rules and re-evaluate** re-judges a saved run offline in seconds. |
 | Run | Live counter and log. |
-| Results | Any run as a table (underpriced, featured, passing, bundles, special cases, closest misses, filtered) with the full card and listing text. **Copy AI prompt**, **Copy price prompt**. |
+| Results | Any run as a table (underpriced, featured, passing, bundles, special cases, closest misses, filtered) with the full card and listing text. **Copy AI prompt**, **Copy offer prompt**, **Copy performance prompt**, **Copy price prompt**. |
 
 ## Workflow
 
@@ -54,9 +54,11 @@ Double-click `launch.bat` (or `python deals.py` for a console run with `search.t
 | `Target.md` | The Deal Evaluation Brief: the binding rules |
 | `search.toml` | All settings (edited by the Settings and Selection rules tabs) |
 | `prices.toml` | Fair used part prices, written by the calibration agent (absent until the first calibration) |
-| `prompts/ai_pass.md` | Priming for the final AI pass |
+| `prompts/ai_pass.md` | Priming for the final AI pass: pick, speed per model version, maximum price, seller messages |
+| `prompts/best_offer.md` | Comparison pass, **best offer**: the top candidates part by part, used value, fair value, maximum price, ranked by value |
+| `prompts/best_performance.md` | Comparison pass, **best performance**: how well each candidate runs Coder IQ1_M and IQ2_XS (tok/s, context, usability), € per tok/s, best performer vs best value |
 | `prompts/price_calibration.md` | The price-calibration procedure, the sanity check and the exact `prices.toml` shape |
-| `runs/<date_time>/` | `results.md`, `ai_prompt.md`, `listings.jsonl`, `raw.jsonl`, `components.csv`, `run.json` |
+| `runs/<date_time>/` | `results.md`, `ai_prompt.md`, `offer_prompt.md`, `performance_prompt.md`, `listings.jsonl`, `raw.jsonl`, `components.csv`, `run.json` |
 | `WORK_REPORT.md` | Full reference: every rule, flag, output file, code module, safeguard and known limit |
 
 Code: `config.py` / `policy.py` (settings), `text.py` / `parse.py` (text → parts), `hardware.py` (component

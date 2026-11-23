@@ -18,7 +18,8 @@ Double-click `launch.bat`. Four tabs:
 3. **Run:** live counter (listings found, full listings read) and log.
 4. **Results:** any run as a table (featured, passing, bundles, special cases, closest misses, filtered).
    Selecting a row shows its card and full listing text with clickable links; double-click opens the listing.
-   **Copy AI prompt** puts `ai_prompt.md` on the clipboard.
+   **Copy AI prompt** puts `ai_prompt.md` on the clipboard; **Copy offer prompt** and **Copy performance prompt**
+   the two comparison passes (older runs gain them when re-evaluated).
 
 Search order: local sweep, specific terms, bundles, then the broad terms ("PC", "Rechner", …) last.
 Console alternative: edit `search.toml`, then `python deals.py`.
@@ -42,6 +43,8 @@ Tests (offline, no searches): `python -m pytest -q`
 |---|---|
 | `results.md` | Report in Priming Brief §9 order: A pick, B0 underpriced, B shortlist (+ relevant listing text), B2 bundles, C seller questions (top 5 only), D special cases, E market notes, F search log, G closest misses |
 | `ai_prompt.md` | `prompts/ai_pass.md` (priming) + `Target.md` (binding rules) + `results.md` |
+| `offer_prompt.md` | The same with `prompts/best_offer.md`: up to 8 top candidates compared part by part on value |
+| `performance_prompt.md` | The same with `prompts/best_performance.md`: up to 8 top candidates on how well they run the model, against price |
 | `listings.jsonl` | Every assessed listing: parsed build with stated/assumed source per part, fixes, effective price, tier, verdict |
 | `raw.jsonl` | Raw search hit + full detail per listing |
 | `run.json` | Settings snapshot + run stats |
@@ -60,7 +63,8 @@ Tests (offline, no searches): `python -m pytest -q`
 | `hardware.py` | Brief §1/§4 component knowledge: GPU cards (used value, PCIe lanes/gen, Brief note), PCIe link, upgrade headroom, parts-value floor |
 | `prices.py` | Fair-price table (`prices.toml`): shape check, part names, fair price per listing, components.csv |
 | `rules.py` | The Brief as code: hard rejects, price sanity, fix ledger → effective price, RAM path, tiers, tie-breakers, needs-answers ranking, featuring, special cases, bundle track, risk signals, seller questions |
-| `prompts/ai_pass.md` | The AI-pass priming: goal, user, market, how the program works and where it is weak, what to do, answer format |
+| `prompts/ai_pass.md` | The AI-pass priming: goal, user, market, how the program works and where it is weak, evidence rules, what to do, answer format |
+| `prompts/best_offer.md` / `best_performance.md` | Comparison passes: best offer (parts and price) and best performance (model speed per version and price) |
 | `deals.py` | Search, dedupe, full-text fetch with reuse, pure evaluation, re-evaluation of saved runs |
 | `report.py` | Run folder writer and launcher summary |
 | `ui.py` / `ui_rules.py` / `ui_results.py` / `ui_form.py` / `launch.bat` | Tkinter launcher (stdlib): settings, selection rules, run, results tabs |
