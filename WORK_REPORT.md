@@ -9,8 +9,10 @@ Double-click `launch.bat`. Four tabs:
 
 1. **Settings:** `search.toml` as editable fields (home, budget, price range, limits, full text, reuse, bundles,
    the three term lists). **Save and start search** validates, saves (comments kept) and runs a new search.
-2. **Selection rules:** what gets discarded (AM4 RAM floor, VRAM minimum, Intel / Arc / 8500G / small cases /
-   OEM / mini-PCs on or off, mispricing share, scam signals) and the fix costs. Each rule shows how many listings
+2. **Selection rules:** which price the limits use (effective or list), what gets discarded (DDR4 RAM floor, VRAM
+   minimum, Intel judged or dropped, Arc / 8500G / small cases / OEM / mini-PCs on or off, pickup-only listings
+   keep / local only / drop, mispricing share, scam signals), the PSU wattage below which a fix counts, and the fix
+   costs. Each rule shows how many listings
    it drops in the chosen saved run. **Save rules and re-evaluate** judges that saved run again with no search and
    no API calls (seconds), into `runs/<date_time>_review/`.
 3. **Run:** live counter (listings found, full listings read) and log.
@@ -68,19 +70,43 @@ Tests (offline, no searches): `python -m pytest -q`
 - **Not-installed context.** "erweiterbar auf 64GB", "max. 128GB", "Ryzen 9000 ready", "vorher GTX 1060" are
   skipped; "B450 Tomahawk MAX, 32GB" is not mistaken for a limit.
 - **Negation.** "kein Netzteil", "ohne SSD" become missing parts (priced as fixes); "nicht defekt" passes.
+- **Intel CPUs** are read to the model: i5-13600KF → 13th gen, Core Ultra 7 265K → LGA1851. "i5 9400F" is not
+  mistaken for a Ryzen. A bare "i7" gets the oldest generation its board allows, else 12th (flagged, asked).
+- **Pickup only.** "nur Abholung", "kein Versand", "Selbstabholer", "wird nicht versendet" or the listing's
+  `Versand: Nur Abholung` set `pickup_only`.
 - **Conflicts.** Title and description disagreeing (e.g. 32 vs 16 GB, two GPUs) mark the part assumed and
   add a `conflict_*` flag and a seller question; the listing is not dropped.
 - **Assumptions decide price, not rejection** (Priming §6.2), and every assumed value shows `(?)`.
 
+## Prices
+
+- **List €** (the ask), **Effective €** (VB haggle + confirmed fixes) and **Worst €** (+ the fixes the listing
+  leaves open) are shown everywhere. `budget.price_basis` picks which one the limits, target and ranking use.
+- **Fixes count only when confirmed:** no PSU / a stated PSU under `fixes.psu_min_w` (650 W; 850 W for 24 GB
+  cards), no SSD / under 1 TB, a stated stock cooler on a hot CPU. A PC sold as working that does not mention a part
+  has one: flagged (`psu_unstated`, `psu_brand_unknown`, `ssd_unstated`, `cooler_unstated`, …) and in Worst € only.
+  This changes the Brief, which counts every unconfirmed part, and is listed in every report.
+
 ## Ranking and featuring
 
-- **AM4 RAM floor** (`rules.am4_min_ram_gb`, default 32; the Brief's is 64). AM4 builds below 64 GB pass as
-  tier 5, ranked after everything else, under the normal limit.
+- **DDR4 RAM floor** (`rules.am4_min_ram_gb`, default 32; the Brief's is 64 for AM4). Applies to AM4 and to Intel
+  with stated DDR4. AM4 builds below 64 GB pass as tier 5, ranked after everything else.
+- **Intel, case by case** (`rules.allow_intel`, default on; the Brief rejects all Intel):
+  - 10th gen and older: rejected (PCIe 3.0, no AVX-512, slow DDR4).
+  - No AVX-512 counts only while the day-one model's experts spill to the CPU (experts + 1 GB reserve > VRAM).
+    For this model that is nearly always the case; 11th gen has AVX-512.
+  - The dead socket counts only under a CPU that is not already strong (i5-13600K/14600K+, 11th-14th gen i7/i9,
+    Core Ultra 5 245+ / 7 / 9).
+  - Neither: tiered like AM5. One: tier 4. Both: tier 5.
+  - AM5 swap per Intel PC: used B650 120 € + Ryzen 5 7600 140 € (+ DDR5 for DDR4) minus the Intel board + CPU
+    resale (estimates in `rules.py`), compared with the best AM5 deal of the run.
+  - 13th/14th gen i7/i9 and i5-x600 get a BIOS/microcode question (Vmin instability).
 
 - **Needs answers ranks lower.** A listing whose GPU VRAM, CPU/platform or RAM size is unknown or contradicted
   ranks below clear listings of its tier, and is featured (shortlist, cards, seller message) only when the deal
-  is good: tier 0-1 or effective at or under the target. Other unknowns are priced at their worst case instead.
-- **Tier 3 (16 GB)** is featured only if effective + 490 € RAM still beats the best tier 0-2 PC.
+  is good: tier 0-1 or the budget price at or under the target. Other unknowns are flagged and in Worst €.
+- **Tier 3 (16 GB)** is featured only if its price + 490 € RAM still beats the best tier 0-2 PC.
+- **Pickup only** (`rules.pickup_only`): keep with a flag (default), keep only local ones, or drop.
 - **Price sanity.** Placeholder prices, prices stated for one part ("Preis gilt nur für die Grafikkarte",
   "pro Stück"), and asks below half of the stated GPU + RAM value are filtered and listed in section H.
 - **System view per listing:** PCIe link (weakest of CPU, slot, card), headroom for the next GPU and RAM, and the
@@ -105,6 +131,8 @@ Tests (offline, no searches): `python -m pytest -q`
 
 ## Known limits
 
-- Fix costs and GPU/RAM prices in `rules.py` are the Brief's estimates; adjust them as prices move.
+- Fix costs and GPU/RAM prices in `rules.py` are the Brief's estimates; adjust them as prices move. The AM5-swap
+  and Intel resale figures and the 1 GB VRAM reserve are estimates too.
+- Intel's strong-CPU list and AVX-512 by generation are fixed in `hardware.py`, not settings.
 - The case is shown, never priced, for PCs (no reliable data without photos); bundles get a case fix if none is named.
 - No images are read; the AI pass or the seller questions settle what only photos show.

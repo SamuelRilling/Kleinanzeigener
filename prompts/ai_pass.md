@@ -34,14 +34,23 @@ premium. Prices drift up month to month: a deal that clearly passes should not w
 3. Applied the Brief: hard rejects (§2), fixes added to the price (§5), tiers (§3, §6), ranking.
 4. Wrote the sections below. Featured listings and bundles get a verification card with the listing text.
 
-**Effective €** = ask, minus the VB haggle (10 % by default) on VB listings, plus the fixes that count toward the
-limit. Each listing's Fixes column shows the amounts used; the defaults:
-- PSU 95 € (120 € for a 24 GB card) unless a trusted brand of ≥ 750 W (≥ 850 W) is named. Trusted: be quiet! Pure/
-  Straight/Dark Power (not System Power), Corsair RM/HX/AX/SF, Seasonic, MSI MAG A…GL, Cooler Master MWE Gold,
-  FSP Hydro G.
-- Cooler 30 € for a hot CPU (Ryzen 7000 X, any X3D, Ryzen 9 9900/9950) when no tower cooler or AIO is named.
-- SSD 90 € unless an NVMe of 1 TB or more is named.
-- Bundles only: GPU 220 € (a used RTX 3060 12 GB) and case 65 € if no case is named.
+**Two prices per listing.** **List €** = the ask as listed. **Effective €** = ask, minus the VB haggle (10 % by
+default) on VB listings, plus the fixes the listing *confirms*. **Worst €** = effective plus the fixes the listing
+leaves open. The results header says which price the limits were judged on (effective by default; the user can
+choose list).
+
+**Fixes are counted only when confirmed:** the listing says the part is missing or too weak. A PC sold as working
+that does not mention its PSU, SSD or cooler has one; that is flagged (`psu_unstated`, `psu_brand_unknown`,
+`psu_watts_unknown`, `ssd_unstated`, `ssd_type_or_size_unknown`, `cooler_unstated`) and only in Worst €. The Fixes
+column shows counted fixes, then "(unconfirmed: …)". The defaults:
+- PSU 95 € (120 € for a 24 GB card): counted when there is none or a stated one is under 650 W (850 W for a 24 GB
+  card); unconfirmed when no trusted brand with watts is named. Trusted: be quiet! Pure/Straight/Dark Power (not
+  System Power), Corsair RM/HX/AX/SF, Seasonic, MSI MAG A…GL, Cooler Master MWE Gold, FSP Hydro G.
+- Cooler 30 € for a hot CPU (Ryzen 7000 X, any X3D, Ryzen 9 9900/9950, Intel K): counted for a stated stock cooler,
+  unconfirmed when none is named.
+- SSD 90 €: counted when there is none or it is under 1 TB; unconfirmed when no NVMe of 1 TB+ is named.
+- Bundles only: GPU 220 € (a used RTX 3060 12 GB) and case 65 € if no case is named (always counted).
+A PSU of 650-749 W passes the price but not tier 1 or Headroom: the next big GPU still needs a new one.
 
 The case of a complete PC is never priced; it shows under Headroom.
 
@@ -49,24 +58,40 @@ The case of a complete PC is never priced; it shows under Headroom.
 good deals (flag `stretch_over_…`). AM4 with 64 GB+ (tier 4) has a lower cap of its own.
 
 **Rules the user changed on purpose** are listed under "Selection rules changed from the Brief" at the top of the
-results. Apply them as given; never report them as errors. Builds they let through on a dead-end platform (AM4 below
-64 GB, Intel if allowed) are tier 5, ranked after everything else: the RAM upgrade is bought at today's prices and the
-socket is kept for good. Pick one only when nothing on AM5 comes close, and say what it gives up.
+results. Apply them as given; never report them as errors. AM4 below 64 GB is tier 5, ranked after everything else:
+the RAM upgrade is bought at today's prices on a socket kept for good.
+
+**Intel is judged case by case** (the Brief rejects it for two reasons; the program applies each only where it bites):
+- 10th gen and older is rejected (PCIe 3.0, no AVX-512, slow DDR4).
+- *No AVX-512* counts only while part of the day-one model's experts runs on the CPU (experts minus VRAM; the card
+  shows the GB). With this model that is almost always, so expect it. 11th gen has AVX-512.
+- *Dead socket* counts only when the CPU is not already strong (strong: i5-13600K/14600K and up, any 11th-14th gen
+  i7/i9, Core Ultra 5 245 and up, Ultra 7/9). A strong CPU needs no upgrade; the upgrades that matter are RAM, GPU, PSU.
+- Neither applies: tiered like AM5 (0-3). One: tier 4. Both: tier 5.
+- DDR4 Intel (when stated) needs the same RAM floor as AM4.
+- Each Intel card shows the **AM5 swap**: used B650 + Ryzen 5 7600 (+ DDR5 if it has DDR4), minus the Intel board and
+  CPU sold on; estimates. `am5_swap_beats_best_am5` means the Intel PC plus the swap still costs less than the best
+  AM5 deal in the run: a real option if its GPU, RAM, PSU and case are good.
+- 13th/14th gen i7/i9 and i5-x600: `raptor_lake_check_bios` (Vmin instability unless the BIOS has microcode 0x12B+;
+  the seller question asks). LGA1851 gets no next-generation CPUs (`lga1851_no_next_gen_cpus`).
+Pick an Intel build over AM5 only when it is clearly better value, and say what it gives up.
 
 **Assumptions** (shown as `(?)`): an unknown part is priced at its cheapest acceptable fix, not rejected. The
 exception: a listing must name a CPU and a GPU (bundles: a CPU), or it is rejected. Defaults when not stated:
 - RAM size → 16 GB; layout → the worst one (32 GB → 4×8).
 - RTX 3060 → 12 GB. 4060 Ti / 5060 Ti / 9060 XT → 8 GB, and 3080 → 10 GB: below the 12 GB minimum, so rejected.
 - A Ryzen with no model number → AM4 (worst case), unless an AM5 chipset or DDR5 is named.
+- An Intel CPU with no generation → the oldest its board allows, else 12th gen (`intel_gen_assumed`); its DDR → DDR4
+  (Core Ultra: DDR5).
 - A part the listing contradicts itself on (title 32 GB, text 16 GB) is assumed and flagged `conflict_…`.
 
 **Ranking:** tier, then whether the listing needs seller answers, then the Brief's tie-breakers (RAM, NVIDIA, VRAM,
-board, PSU, 2-stick layout, PCIe 5.0 slot, CPU), then effective €.
+board, PSU, 2-stick layout, PCIe 5.0 slot, CPU), then the budget price (effective or list, per the header).
 
 **Featured** (sections A, B, B1, C): every listing whose key parts are clear, plus a listing that needs answers only
-when the deal is good (tier 0-1, or effective at or under the target). "Needs answers" means the GPU's VRAM, the CPU
+when the deal is good (tier 0-1, or the budget price at or under the target). "Needs answers" means the GPU's VRAM, the CPU
 or platform, or the RAM size is unknown or contradicted: these can flip the verdict. A 16 GB build (tier 3) is
-featured only if effective + 490 € for RAM still beats the best tier 0-2 PC.
+featured only if its price + 490 € for RAM still beats the best tier 0-2 PC.
 
 ### Reading the columns
 - **Day-one AI:** the model version the RAM runs (Brief §3). "none" means no local agent until RAM is bought.
@@ -76,24 +101,30 @@ featured only if effective + 490 € for RAM still beats the best tier 0-2 PC.
 - **Headroom:** as bought, before fixes.
   - PSU ✓ = a trusted brand of ≥ 750 W (≥ 850 W for 24 GB cards).
   - Case ✓ = a mesh/airflow case is named; ? = not shown to be one.
-  - Free RAM slots; whether there is a PCIe 5.0 slot; Zen 6 upgrade on AM5, or a dead-end socket.
+  - Free RAM slots; whether there is a PCIe 5.0 slot; Zen 6 upgrade on AM5, or a dead-end socket (Intel: which,
+    and whether the CPU is already strong).
 - **Flags:**
   - Buying signals: `act_fast` (tier 0-2 at or under target), `receipt`.
-  - Data gaps: `needs_answers`, `conflict_…`, `…_missing` (seller says the part is not included; priced as a fix).
+  - Data gaps: `needs_answers`, `conflict_…`, `…_missing` (seller says the part is not included; priced as a fix),
+    the unconfirmed-fix flags above.
   - Hardware notes: `pcie_link_reduced`, `amd_gpu_secondary` (weaker for CUDA tools), `ram_slots_full`,
     `a620_board_swap_later_…`, `beats_tier12_with_ram` / `dominated_by_tier12` (tier 3 only), and for builds the
-    user's rule changes let through: `vram_below_brief`, `intel_platform_allowed`.
+    user's rule changes let through: `vram_below_brief`. Intel: `intel_no_avx512_offload`, `intel_dead_socket`,
+    `intel_cpu_strong`, `intel_gen_assumed`, `raptor_lake_check_bios`, `lga1851_no_next_gen_cpus`,
+    `am5_swap_beats_best_am5` / `am5_swap_dearer`.
   - `preview_only`: judged on the short search preview, no full text was read. Treat its parts as unverified.
+  - Logistics: `pickup_only` (the text says "nur Abholung" / "kein Versand"; the user may filter these to local only).
   - Risk: `shipping_only`, `seller_away`, `offplatform_payment`, `no_photos`, `too_cheap_vs_market`,
     `mining_or_24_7`, `smoker`, `commercial`.
   - Memory between runs: `new_since_last_run`, `price_drop_from_…`.
 
 ### Where the program is reliable, and where it is not
-- **Reliable:** the arithmetic, the rule order, rejects on clearly stated parts (Intel, too little VRAM, AM4 under the
-  floor, laptops, mini-PCs, OEM prebuilts, unless the user allowed them), and duplicate listings.
+- **Reliable:** the arithmetic, the rule order, rejects on clearly stated parts (old Intel, too little VRAM, DDR4
+  under the floor, laptops, mini-PCs, OEM prebuilts, unless the user allowed them), and duplicate listings.
 - **Check:**
   - Which GPU, CPU and RAM are really installed when the text is loose (upgrade stories, "passend für", option lists).
-  - A good PSU brand outside the trusted list: priced as a fix that may not be needed.
+  - A good PSU brand outside the trusted list: an unconfirmed fix (Worst €) that may not be needed.
+  - Worst € on the pick: say which open parts the seller should confirm before the price is safe.
   - SATA vs NVMe.
   - A stock cooler assumed where the text implies otherwise.
   - What a bundle really contains.
@@ -115,7 +146,7 @@ featured only if effective + 490 € for RAM still beats the best tier 0-2 PC.
    where there is one, drop what the text already answers, keep it short and numbered.
 
 ## Your answer
-- **A. Pick:** the listing, effective €, and 3-5 lines tied to the Brief (platform, RAM tier, GPU, PSU/case headroom,
+- **A. Pick:** the listing, list € and effective € (worst €), and 3-5 lines tied to the Brief (platform, RAM tier, GPU, PSU/case headroom,
   price). Say "act fast" when it applies.
 - **B. Shortlist** (up to 5): `# | Listing | Effective € | Tier | RAM | GPU | Headroom | Verdict | Confidence`.
   Verdict = one plain sentence. Confidence = high/medium/low, from how much rests on assumptions.
