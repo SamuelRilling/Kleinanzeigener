@@ -5,10 +5,13 @@ everything a final AI pass needs into one dated folder.
 
 ## Use
 
-1. Edit `search.toml` (home, budget, price range, search terms, limits, bundle track, AI prompt files).
-2. Double-click `launch.bat`: the window shows the settings, **Confirm and start search** runs it in the
-   same window with a live log, then shows a summary and **Open results**.
-   Console alternative: `python deals.py`.
+1. Double-click `launch.bat`. The **Settings** tab shows `search.toml` as editable fields: home, budget,
+   AM4 RAM floor, price range, limits, bundles, and the three term lists. **Save and start search** validates,
+   saves (comments in the file are kept) and switches to **Run**: a live counter of listings found and full
+   listings read, the log, then a summary and **Open results**. Category, sort and AI files: **Open file**.
+   Console alternative: edit `search.toml`, then `python deals.py`.
+2. Search order: local sweep, specific terms (GPUs, AM5, RAM), bundles, then the broad terms ("PC",
+   "Rechner", …) last, so the request cap cuts the broadest searches first.
 3. Paste `runs/<date_time>/ai_prompt.md` into the AI.
 
 Tests (offline, no searches): `python -m pytest -q`
@@ -29,7 +32,7 @@ Tests (offline, no searches): `python -m pytest -q`
 
 | File | Role |
 |---|---|
-| `search.toml` / `config.py` | Settings; validated at load, every bad field reported at once |
+| `search.toml` / `config.py` | Settings; validated at load, every bad field reported at once; form saves are validated before the file is replaced |
 | `text.py` | Shared primitives: clauses (spec lines), `Label:` lines, "not installed" context (limits, support notes, history), negation |
 | `parse.py` | Text → parts: GPU + VRAM twins, CPU/platform, chipset, RAM size/layout/DDR, PSU, cooler, SSD, case, text rejects |
 | `hardware.py` | Brief §1/§4 component knowledge: GPU cards (used value, PCIe lanes/gen, Brief note), PCIe link, upgrade headroom, parts-value floor |
@@ -37,7 +40,7 @@ Tests (offline, no searches): `python -m pytest -q`
 | `prompts/ai_pass.md` | The AI-pass priming: goal, user, market, how the program works and where it is weak, what to do, answer format |
 | `deals.py` | Search (local sweep + terms + bundles), dedupe, snippet triage, best-first detail fetch, run |
 | `report.py` | Run folder writer and launcher summary |
-| `ui.py` / `launch.bat` | Tkinter launcher (stdlib) |
+| `ui.py` / `launch.bat` | Tkinter launcher (stdlib): settings form, live counter, log, summary |
 
 ## How parsing stays robust
 
@@ -51,6 +54,9 @@ Tests (offline, no searches): `python -m pytest -q`
 - **Assumptions decide price, not rejection** (Priming §6.2), and every assumed value shows `(?)`.
 
 ## Ranking and featuring
+
+- **AM4 RAM floor** (`rules.am4_min_ram_gb`, default 32; the Brief's is 64). AM4 builds below 64 GB pass as
+  tier 5, ranked after everything else, under the normal limit.
 
 - **Needs answers ranks lower.** A listing whose GPU VRAM, CPU/platform or RAM size is unknown or contradicted
   ranks below clear listings of its tier, and is featured (shortlist, cards, seller message) only when the deal

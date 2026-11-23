@@ -13,17 +13,21 @@ am4_max_eur = 550             # cap for AM4 + 64 GB builds (tier 4)
 vb_discount = 0.10            # expected haggle on "VB" listings (0.05-0.15)
 special_max_eur = 800         # §6.3 special cases: effective + GPU fix must stay under this
 
+[rules]                       # deliberate loosening of the Brief (Target.md §2)
+am4_min_ram_gb = 32           # AM4 PCs need at least this much RAM (Brief: 64). 32-48 GB AM4 builds pass as
+                              # tier 5 (ranked last, normal limit). One of 16, 32, 48, 64
+
 [search]
 category = "PCs"              # Elektronik > PCs
-ask_min_eur = 100             # asking price range searched
+ask_min_eur = 500             # asking price range searched
 ask_max_eur = 850             # above the limit on purpose: VB haggling and stretch deals
 sort = "DATE_DESCENDING"      # newest first
 pages_per_term = 10           # 30 ads per page
-max_requests = 250            # search requests per run, all terms together
-max_details = 300             # full listing fetches per run, best-ranked first
+max_requests = 400            # search requests per run, all terms together
+max_details = 450             # full listing fetches per run, best-ranked first
 delay_s = 0.3                 # pause between requests (be polite to the site)
-# Matched against title + description. A passing PC must name a 12 GB+ GPU, so GPUs come
-# first (8 GB twins included: the parser decides the VRAM), then AM5 words, then big RAM.
+# Matched against title + description. GPUs (8 GB twins included: the parser decides the VRAM),
+# AM5 words, and big RAM.
 terms = [
     "3060", "4060 Ti", "5060 Ti", "4070", "5070", "3080", "3090", "4080", "5080", "4090",
     "6700 XT", "6750 XT", "6800", "6900 XT", "6950 XT", "7600 XT", "7700 XT", "7800 XT", "7900",
@@ -31,6 +35,13 @@ terms = [
     "AM5", "DDR5", "B650", "X670", "B850", "X870", "A620",
     "7600", "7600X", "9600X", "7700X", "9700X", "7800X3D", "9800X3D", "8700G",
     "64GB", "64 GB", "2x32",
+]
+# Searched last (after bundles): many listings only say "PC" in the title and list the parts in
+# the text, which is read in full. They match the most listings, so the request cap cuts them first.
+broad_terms = [
+    "PC", "Gaming PC", "Gamer PC", "Spiele PC", "Zocker PC", "Rechner", "Gaming Rechner", "Computer",
+    "Gaming Computer", "Personal Computer", "Desktop PC", "Tower PC", "Komplett PC", "Komplettsystem",
+    "Workstation", "Selbstbau PC",
 ]
 
 [bundles]                     # Priming §5.1 secondary track: AM5 CPU + board + RAM, GPU bought separately
