@@ -95,7 +95,7 @@ def test_seen_file_is_atomic_and_survives_corruption(tmp_path: Path, monkeypatch
 
 def test_run_folder_has_every_document(tmp_path: Path):
     cfg = config.load()
-    rec = rules.assess(HIT, cfg.budget)
+    rec = rules.finalize([rules.assess(HIT, cfg.budget)], cfg.budget)[0]
     stats = {"run_time": "2026-11-23T12:00:00", "requests": 1, "details": 1, "detail_errors": 0, "detail_skipped": 0,
              "terms": {"3060": 1}, "errors": [], "capped": False, "rejects": {}, "unique": 1, "incomplete": False}
     result = {"cfg": cfg, "stats": stats, "hits": [HIT], "raw": {"1": HIT}, "snippet": [rec], "final": [rec],
@@ -104,9 +104,10 @@ def test_run_folder_has_every_document(tmp_path: Path):
     names = {p.name for p in folder.iterdir()}
     assert names == {"results.md", "ai_prompt.md", "listings.jsonl", "raw.jsonl", "run.json"}
     prompt = (folder / "ai_prompt.md").read_text(encoding="utf-8")
-    assert prompt.startswith("# AI pass") and "# Search results (this run)" in prompt and HIT["title"] in prompt
+    assert prompt.startswith("# Used PC deal review") and "# Search results (this run)" in prompt and HIT["title"] in prompt
     assert json.loads((folder / "listings.jsonl").read_text(encoding="utf-8").splitlines()[0])["ad_id"] == "1"
-    assert "1 PCs and 0 bundles pass" in (folder / "results.md").read_text(encoding="utf-8")
+    md = (folder / "results.md").read_text(encoding="utf-8")
+    assert "1 featured PCs" in md and "### 1. " + HIT["title"] in md and "B650" in md
     assert "Output:" in report.summary(result, folder)["text"]
 
 
