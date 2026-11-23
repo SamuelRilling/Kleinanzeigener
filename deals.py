@@ -32,7 +32,7 @@ log = logging.getLogger("deals")
 
 # Rejects that a fuller description cannot undo.
 FINAL_AT_SNIPPET = {"intel_platform", "intel_arc", "not_desktop", "mini_pc_or_handheld", "wanted_ad", "trade_only",
-                    "reserved", "oem_prebuilt", "gpu_only", "no_price"}
+                    "reserved", "oem_prebuilt", "gpu_only", "no_price", "placeholder_price", "price_not_for_whole_pc"}
 
 
 async def call(client, tool: str, args: dict, stats: dict) -> dict | None:
@@ -205,7 +205,7 @@ async def scan(cfg: config.Config) -> dict:
         if r["reject"]:
             count(stats, r["reject"])
     stats["incomplete"] = stats["details"] > 0 and stats["detail_errors"] / stats["details"] > INCOMPLETE_ERROR_SHARE
-    passed = sorted((r for r in final if not r["reject"]), key=rules.sort_key)
+    passed = rules.finalize([r for r in final if not r["reject"]], cfg.budget)
     seen = load_seen()
     mark_seen(passed, seen)
     return {"cfg": cfg, "stats": stats, "hits": hits, "raw": raw, "snippet": snippet, "final": final,

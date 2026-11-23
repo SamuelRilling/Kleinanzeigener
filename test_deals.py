@@ -145,7 +145,7 @@ def test_unknown_parts_are_priced_not_rejected():
     assert r["fixes"] == {"psu": rules.FIX_PSU, "ssd": rules.FIX_SSD}
     assert r["tier"] == 2  # 16 GB card, but the PSU is unverified -> not tier 1
     assert r["build"]["ram_layout"] == {"v": (4, 8), "src": "assumed"}  # worst case for "32 GB"
-    assert {"ram", "board", "psu", "storage", "case"} <= set(r["unknown"])
+    assert {"ram_layout", "board", "psu", "storage", "case"} <= set(r["unknown"]) and not r["needs_answers"]
 
 
 @pytest.mark.parametrize("title, reason", [
@@ -193,7 +193,8 @@ def test_ranking_prefers_ram_over_vram():
     a = rules.assess({**GOOD, "id": "a"})
     b = rules.assess({**GOOD, "id": "b", "title": "Ryzen 5 7600 RTX 3060 12GB 64GB DDR5"})
     assert sorted([a, b], key=rules.sort_key)[0]["ad_id"] == "a"  # tier 1 beats tier 2 first
-    c = rules.assess({**GOOD, "id": "c", "title": "Ryzen 5 7600 RTX 4060 Ti 16GB 64GB DDR5"})
+    c = rules.assess({**GOOD, "id": "c", "title": "Ryzen 5 7600 RTX 4060 Ti 16GB 64GB DDR5",
+                      "description": GOOD["description"].replace("2x16GB", "2x32GB")})
     assert sorted([a, c], key=rules.sort_key)[0]["ad_id"] == "c"  # same tier: more RAM wins
 
 

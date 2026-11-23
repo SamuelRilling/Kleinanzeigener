@@ -5,6 +5,7 @@ seller questions (Priming §9C). Pure functions, no I/O."""
 import re
 from dataclasses import dataclass
 
+import hardware
 import parse
 
 
@@ -33,10 +34,17 @@ RAM_DDR5_2X32 = 950          # 900-1,000
 RAM_DDR4_2X16 = 285          # 200-370
 BOARD_SWAP_A620 = 125        # future cost, not counted (100-150)
 
-X8_GPUS = {"RTX 4060 Ti", "RTX 5060 Ti", "RX 7600 XT"}
-APU_X4 = {"8500", "8300"}           # Ryzen 5 8500G / 3 8300G: GPU at PCIe 4.0 x4
-APU_X8 = {"8600", "8700", "8400"}   # 8600G/8700G (and 8400F/8700F): x8
-PCIE5_CHIPSETS = {"B650E", "X670E", "X870", "X870E"}
+APU_X4 = {"8500", "8300"}           # Ryzen 5 8500G / 3 8300G: GPU at PCIe 4.0 x4 (hard reject)
+PCIE5_CHIPSETS = hardware.PCIE5_CHIPSETS
+# Unknowns that can flip the verdict (an 8 GB twin, the platform, the RAM). Others are
+# already priced at their worst case, so they are asked about but cost no rank.
+CRITICAL_UNKNOWNS = {"gpu_vram", "cpu", "ram"}
+PLACEHOLDER_MAX = 20         # "1 €", "10 €": a price placeholder, never the real price
+MISPRICE_SHARE = 0.5         # ask below half the GPU + RAM value alone: a part price, a typo or a scam
+PRICE_SCOPE_RE = re.compile(
+    r"preis\s+(?:gilt\s+)?(?:nur\s+)?f(?:ü|ue)r\s+(?:die\s+|den\s+|das\s+)?(?:grafikkarte|gpu|graka|cpu|prozessor|ram|"
+    r"arbeitsspeicher|mainboard|netzteil|geh(?:ä|ae)use|einzel)|preis\s+pro\s+(?:st(?:ü|ue)ck|teil|komponente)|"
+    r"st(?:ü|ue)ckpreis|einzelpreis|preise?\s+(?:siehe|laut)\s+(?:beschreibung|liste)|\bab\s+\d+\s*(?:€|euro)|anzahlung")
 BUNDLE_RE = re.compile(r"aufr(?:ü|ue)st[\s-]*(?:kit|set|pc|paket)|\bbundle\b|\bkit\b")
 TIER_NAMES = {0: "0 (24 GB NVIDIA)", 1: "1", 2: "2", 3: "3 (no day-one agent)", 4: "4 (AM4 64 GB+)"}
 
@@ -161,8 +169,11 @@ def fixes(b: dict, bundle: bool = False) -> dict:
 
 
 def ram_path(b: dict) -> dict:
-    """€ to reach 32 GB and 64 GB (outside the budget, Brief §5)."""
+    """€ to reach 32 GB and 64 GB (outside the budget, Brief §5). 2×24 GB has no
+    64 GB step: its path is a second 2×24 kit to 96 GB, which the Brief does not price."""
     gb, (sticks, per) = b["ram_gb"]["v"], b["ram_layout"]["v"]
+    if gb == 48 and sticks == 2:
+        return {"to32": 0, "to64": None, "note": "48 → 96 GB: + 2×24 kit (price not in the Brief)"}
     if b["ddr"] == 4:
         return {"to32": 0 if gb >= 32 else RAM_DDR4_2X16, "to64": 0 if gb >= 64 else RAM_DDR4_2X16 * (1 if gb >= 32 else 2)}
     to32 = 0 if gb >= 32 else RAM_DDR5_2X16
@@ -182,8 +193,10 @@ def ai_tier(b: dict) -> str:
         return "UD-IQ4 (headroom)"
     if gb >= 64:
         return "IQ3_S (ideal)"
-    if gb >= 48 or (gb >= 32 and vram >= 24):
-        return "IQ2_XS (good)"
+    if gb >= 48:
+        return "IQ2_XS (good, borderline fit)"
+    if gb >= 32 and vram >= 24:
+        return "IQ2_XS (good: 24 GB VRAM covers the gap)"
     if gb >= 32:
         return "Coder IQ1_M (good coding)"
     return "none (needs RAM)"
@@ -207,10 +220,10 @@ def tier(b: dict) -> int | None:
 
 
 def sort_key(l: dict) -> tuple:
-    """Tier, then Brief §6 tie-breakers, then effective price."""
+    """Tier, then "needs seller answers" (lower), then Brief §6 tie-breakers, then effective price."""
     b = l["build"]
     psu = b["psu"]["v"]
-    return (l["tier"], -b["ram_gb"]["v"], b["gpu"]["vendor"] != "nvidia", -b["gpu"]["vram"],
+    return (l["tier"], l["needs_answers"], -b["ram_gb"]["v"], b["gpu"]["vendor"] != "nvidia", -b["gpu"]["vram"],
             b["chipset"] == "A620", -(psu["trusted"] * 1000 + (psu["watts"] or 0)),
             b["ram_layout"]["v"][0] != 2, b["chipset"] not in PCIE5_CHIPSETS,
             -((b["cpu"] or {}).get("tier") or 0), l["effective"])
@@ -246,8 +259,10 @@ def unknowns(b: dict) -> list[str]:
         out.append("gpu_vram")
     if b["platform"]["src"] == "assumed" or not (b["cpu"] or {}).get("model") or "cpu" in b["conflicts"]:
         out.append("cpu")
-    if b["ram_gb"]["src"] == "assumed" or b["ram_layout"]["src"] == "assumed":
-        out.append("ram")
+    if b["ram_gb"]["src"] == "assumed":
+        out.append("ram")              # size unknown or contradicted
+    elif b["ram_layout"]["src"] == "assumed":
+        out.append("ram_layout")       # size known, sticks not: only the RAM path cost depends on it
     if not b["chipset"]:
         out.append("board")
     if b["psu"]["src"] == "assumed" or not b["psu"]["v"]["trusted"]:
@@ -264,7 +279,8 @@ def unknowns(b: dict) -> list[str]:
 QUESTIONS = {
     "gpu_vram": "Welche Grafikkarte genau (Modell, wie viel VRAM)?",
     "cpu": "Welcher Prozessor genau (Modell)?",
-    "ram": "Wie ist der Arbeitsspeicher bestückt (z. B. 2×16 oder 4×8 GB, DDR4/DDR5)?",
+    "ram": "Wie viel Arbeitsspeicher ist verbaut, und wie ist er bestückt (z. B. 2×16 oder 4×8 GB, DDR4/DDR5)?",
+    "ram_layout": "Wie ist der Arbeitsspeicher bestückt (z. B. 2×16 oder 4×8 GB)?",
     "board": "Welches Mainboard genau (Modell)?",
     "psu": "Welches Netzteil ist verbaut (Marke, Modell, Watt, ungefähres Alter)?",
     "storage": "Welche SSD ist verbaut (NVMe/M.2 oder SATA, Größe)?",
@@ -273,8 +289,17 @@ QUESTIONS = {
 }
 
 
+SCREENSHOT_PARTS = ("gpu_vram", "cpu", "ram", "ram_layout", "board")
+SCREENSHOT_Q = "Könnten Sie Screenshots von CPU-Z (Reiter „Mainboard“ und „SPD“) und GPU-Z schicken?"
+PSU_PHOTO_Q = "Könnten Sie ein Foto vom Typenschild des Netzteils schicken (Marke, Modell, Watt)?"
+
+
 def seller_message(unknown: list[str], ships: bool, mining_flag: bool) -> str:
-    qs = [QUESTIONS[u] for u in unknown]
+    """Short numbered questions. Two or more of GPU/CPU/RAM/board unknown -> one
+    screenshot request answers them all; an unknown PSU -> a label photo."""
+    shots = [u for u in unknown if u in SCREENSHOT_PARTS]
+    qs = [SCREENSHOT_Q] if len(shots) >= 2 else [QUESTIONS[u] for u in shots]
+    qs += [PSU_PHOTO_Q if u == "psu" else QUESTIONS[u] for u in unknown if u not in SCREENSHOT_PARTS]
     if not mining_flag:
         qs.append("Wurde die Grafikkarte zum Mining oder im 24/7-Betrieb genutzt?")
     qs.append("Ist eine Rechnung vorhanden?")
@@ -284,6 +309,20 @@ def seller_message(unknown: list[str], ships: bool, mining_flag: bool) -> str:
 
 
 TOO_CHEAP = 0.65             # ask below 65 % of the same-GPU median ask = scam signal (Priming §7.1)
+
+
+def price_reject(ask: int, desc: str, floor: int) -> str | None:
+    """The asking price is not the price of this whole PC: missing, a placeholder,
+    explicitly a part price, or far below what its GPU + RAM alone are worth."""
+    if not ask:
+        return "no_price"
+    if ask <= PLACEHOLDER_MAX:
+        return "placeholder_price"
+    if PRICE_SCOPE_RE.search(desc.lower()):
+        return "price_not_for_whole_pc"
+    if floor and ask < MISPRICE_SHARE * floor:
+        return "price_below_parts_value"
+    return None
 
 
 def assess(ad: dict, budget: Budget = DEFAULT_BUDGET, gpu_median: float | None = None) -> dict:
@@ -316,8 +355,11 @@ def assess(ad: dict, budget: Budget = DEFAULT_BUDGET, gpu_median: float | None =
     fx = fixes(b, bundle)
     rec.update(price=price, fixes=fx, effective=price + sum(fx.values()), path=ram_path(b),
                ai=ai_tier(b), unknown=unknowns(b))
-    rec["reject"] = (fatal or ("no_price" if not ask else None)
-                     or hard_reject(b) or ("scam_signals" if len(scam) >= 2 else None))
+    rec.update(needs_answers=bool(CRITICAL_UNKNOWNS & set(rec["unknown"])), featured=False,
+               link=hardware.pcie_link(b) if b["gpu"] else None, headroom=hardware.headroom(b),
+               gpu_note=hardware.card(b["gpu"]).note, parts_floor=hardware.parts_floor(b))
+    rec["reject"] = (fatal or price_reject(ask, desc, rec["parts_floor"]) or hard_reject(b)
+                     or ("scam_signals" if len(scam) >= 2 else None))
     if rec["reject"] == "vram_under_12gb" and not hard_reject(b, ignore_vram=True) \
             and b["ram_gb"]["v"] >= 48 and rec["effective"] + FIX_GPU <= budget.special_max:
         rec["special"] = True
@@ -344,15 +386,34 @@ def _flags(rec: dict, t: int | None, budget: Budget) -> list[str]:
         f.append("act_fast")
     if b["chipset"] == "A620":
         f.append(f"a620_board_swap_later_{BOARD_SWAP_A620}")
-    cpu = b["cpu"] or {}
-    if cpu.get("model") in APU_X8 and cpu.get("suffix") in ("G", "F") and b["gpu"]["name"] not in X8_GPUS:
-        f.append("apu_x8_link")
+    if rec["link"] and rec["link"]["reduced"]:
+        f.append("pcie_link_reduced")
     if b["gpu"]["vendor"] == "amd":
         f.append("amd_gpu_secondary")
-    if b["gpu"]["name"] == "RTX 5060 Ti" and b["chipset"] not in PCIE5_CHIPSETS:
-        f.append("5060ti_without_pcie5_slot")
-    if b["chipset"] in ("B450", "A520", "B350", "A320"):
-        f.append("pcie3_board")
+    if b["ram_layout"]["v"][0] == 4:
+        f.append("ram_slots_full")
+    if rec["needs_answers"]:
+        f.append("needs_answers")
     f += [f"conflict_{p}" for p in b["conflicts"]]
     f += [f"{p}_missing" for p in ("psu", "storage") if b[p]["v"].get("missing")]
     return f + rec["scam"] + rec["cond"] + (["commercial"] if rec["commercial"] else [])
+
+
+def finalize(passed: list[dict], budget: Budget = DEFAULT_BUDGET) -> list[dict]:
+    """Rank the passing listings and decide which are featured (new records, inputs untouched).
+    - Tier 3 (16 GB) counts only if effective + the RAM step still beats the best
+      tier 0-2 PC (Brief §6.3); otherwise it is flagged and not featured.
+    - A listing that needs seller answers is featured only when the deal is good:
+      tier 0-1, or effective at or below the target."""
+    best = min((r["effective"] for r in passed if r["track"] == "pc" and r["tier"] <= 2), default=None)
+    out = []
+    for r in sorted(passed, key=sort_key):
+        flags, featured = list(r["flags"]), True
+        if r["tier"] == 3 and best is not None:
+            beats = r["effective"] + RAM_DDR5_2X16 < best
+            flags.append("beats_tier12_with_ram" if beats else "dominated_by_tier12")
+            featured = beats
+        if r["needs_answers"] and not (r["tier"] <= 1 or r["effective"] <= budget.target):
+            featured = False
+        out.append({**r, "flags": flags, "featured": featured})
+    return out
