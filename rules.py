@@ -6,6 +6,7 @@ import re
 
 import hardware
 import parse
+import prices
 from policy import DEFAULT_POLICY, Policy
 
 # RAM prices (Brief §5): path costs only, never counted toward the limit
@@ -373,7 +374,8 @@ def seller_message(unknown: list[str], ships: bool, mining_flag: bool) -> str:
     return f"Hallo,\n\nich interessiere mich für Ihren PC und hätte noch ein paar kurze Fragen:\n{lines}\n\nVielen Dank und viele Grüße"
 
 
-TOO_CHEAP = 0.65             # ask below 65 % of the same-GPU median ask = scam signal (Priming §7.1)
+VB_MAX_HAGGLE = 0.15         # most a VB seller is expected to come down, even when the fair price is lower
+TOO_CHEAP = 0.65            # ask below 65 % of the same-GPU median ask = scam signal (Priming §7.1)
 
 
 def price_reject(ask: int, desc: str, floor: int, share: float = DEFAULT_POLICY.misprice_share) -> str | None:
@@ -399,7 +401,24 @@ def pickup_reject(rec: dict, policy: Policy) -> str | None:
     return None if rec["local"] else "pickup_only_not_local"
 
 
-def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None = None) -> dict:
+def value(delta: float | None, trusted: bool, policy: Policy) -> str | None:
+    """"under" / "over" against the fair price, only when the key parts were read, not assumed."""
+    if delta is None or not trusted:
+        return None
+    if delta <= -policy.underpriced_pct / 100:
+        return "under"
+    return "over" if delta >= policy.overpriced_pct / 100 else None
+
+
+def vb_price(ask: int, fair: int | None, policy: Policy) -> int:
+    """Expected price of a VB listing: the usual haggle, or down to the fair price when that
+    is lower, but never more than VB_MAX_HAGGLE off the ask."""
+    usual = ask * (1 - policy.vb_discount)
+    return round(usual if fair is None else max(ask * (1 - VB_MAX_HAGGLE), min(usual, fair)))
+
+
+def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None = None,
+           table: dict | None = None) -> dict:
     """One listing (search hit or detail) -> assessed record. `reject` is set when
     it fails; `special` for a §6.3 arbitrage case; `track` is "pc" or "bundle".
     `gpu_median`: median ask of PCs with the same GPU in this scan."""
@@ -428,7 +447,12 @@ def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None =
         "build": b, "scam": scam, "cond": cond, "description": desc, "full_text": "attributes" in ad,
         "reject": None, "special": False, "tier": None, "flags": [],
     }
-    price = round(ask * (1 - policy.vb_discount)) if vb else ask
+    fp = prices.fair(b, table) if table and not bundle else None
+    rec.update(fair=(fp or {}).get("eur"), fair_parts=(fp or {}).get("parts"), fair_missing=(fp or {}).get("missing"),
+               fair_stated=bool(fp and fp["stated"]))
+    rec.update(fair_delta=round(ask / rec["fair"] - 1, 3) if rec["fair"] and ask else None)
+    rec["value"] = value(rec["fair_delta"], rec["fair_stated"], policy)
+    price = vb_price(ask, rec["fair"] if rec["fair_stated"] else None, policy) if vb else ask
     fx, maybe = fixes(b, policy, bundle), maybe_fixes(b, policy, bundle)
     effective = price + sum(fx.values())
     rec.update(price=price, fixes=fx, maybe_fixes=maybe, effective=effective, worst=effective + sum(maybe.values()),
@@ -480,6 +504,10 @@ def _flags(rec: dict, t: int | None, policy: Policy) -> list[str]:
                                     ("raptor_lake_check_bios", i["raptor_lake"])) if on]
     if rec["pickup_only"]:
         f.append("pickup_only")
+    if rec["value"]:
+        f.append(f"{rec['value']}priced_{abs(round(rec['fair_delta'] * 100))}pct")
+    if rec["vb"] and rec["fair_stated"] and rec["price"] < round(rec["ask"] * (1 - policy.vb_discount)):
+        f.append("vb_target_from_fair_price")
     f += unconfirmed_flags(b, rec["maybe_fixes"])
     if not rec["full_text"]:
         f.append("preview_only")
@@ -497,7 +525,7 @@ def finalize(passed: list[dict], policy: Policy = DEFAULT_POLICY) -> list[dict]:
     - Tier 3 (16 GB) counts only if effective + the RAM step still beats the best
       tier 0-2 PC (Brief §6.3); otherwise it is flagged and not featured.
     - A listing that needs seller answers is featured only when the deal is good:
-      tier 0-1, or a budget price at or below the target.
+      tier 0-1, a budget price at or below the target, or underpriced against the fair price.
     - An Intel PC gets the cost of moving it onto AM5, compared with the best AM5 deal."""
     pcs = [r for r in passed if r["track"] == "pc" and r["tier"] <= 2]
     best = min((r["budget"] for r in pcs), default=None)
@@ -509,7 +537,7 @@ def finalize(passed: list[dict], policy: Policy = DEFAULT_POLICY) -> list[dict]:
             beats = r["budget"] + RAM_DDR5_2X16 < best
             flags.append("beats_tier12_with_ram" if beats else "dominated_by_tier12")
             featured = beats
-        if r["needs_answers"] and not (r["tier"] <= 1 or r["budget"] <= policy.target):
+        if r["needs_answers"] and not (r["tier"] <= 1 or r["budget"] <= policy.target or r.get("value") == "under"):
             featured = False
         if r["am5_swap"] is not None and best_am5 is not None:
             flags.append("am5_swap_beats_best_am5" if r["budget"] + r["am5_swap"] < best_am5 else "am5_swap_dearer")

@@ -253,13 +253,13 @@ def evaluate(cfg: config.Config, hits: list[dict], details: dict, stats: dict) -
     """Pure judging, no API calls: every listing is assessed on its full text when one was
     read, else on the search preview (flagged `preview_only` if it passes)."""
     stats = {**stats, "rejects": dict(stats.get("rejects", {}))}
-    snippet = [rules.assess(h, cfg.policy) for h in hits]
+    snippet = [rules.assess(h, cfg.policy, table=cfg.prices) for h in hits]
     medians = gpu_medians(snippet)
     final = []
     for h, s in zip(hits, snippet):
         row = details.get(h["id"])
         gpu = (s["build"]["gpu"] or {}).get("name")
-        final.append(rules.assess(row, cfg.policy, medians.get(gpu)) if row else s)
+        final.append(rules.assess(row, cfg.policy, medians.get(gpu), cfg.prices) if row else s)
     for r in final:
         if r["reject"]:
             count(stats, r["reject"])

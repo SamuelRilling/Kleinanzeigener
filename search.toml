@@ -76,6 +76,11 @@ enabled = true
 category = "PC-Zubehör & Software"
 terms = ["Aufrüstkit", "Aufrüstset", "Aufrüst PC", "Bundle AM5", "AM5 Bundle", "B650 Bundle", "DDR5 Bundle"]
 
+[prices]                      # fair-price check: an agent fills prices.toml by hand (prompts/price_calibration.md)
+file = "prices.toml"          # used € per GPU / CPU / RAM / board, in the names of each run's components.csv
+underpriced_pct = 15          # ask this % below the fair price: flagged underpriced (a likely good deal)
+overpriced_pct = 20           # ask this % above it: flagged overpriced. Flags only, nothing is dropped
+
 [ai]
 prompt = "prompts/ai_pass.md"   # static instructions put at the top of every ai_prompt.md
 attach = ["Target.md"]          # appended after the instructions: the rules the AI judges by

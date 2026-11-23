@@ -2,6 +2,7 @@
     results.md      human-readable report, Priming Brief §9 order
     ai_prompt.md    static AI instructions (prompts/ai_pass.md) + attached rules + results.md
     listings.jsonl  every assessed listing (parsed build, fixes, verdict)
+    components.csv  every listing's parts in the price table's names: data for price calibration
     raw.jsonl       raw search hit + full detail per fetched listing
     run.json        settings snapshot + run stats
 Everything computable is already computed, so the AI pass only verifies, judges and writes."""
@@ -12,6 +13,7 @@ import statistics
 from datetime import datetime
 from pathlib import Path
 
+import prices
 import rules
 from policy import Policy, deviations
 from text import CLAUSE_SPLIT_RE
@@ -80,6 +82,23 @@ def eff_txt(r: dict) -> str:
     return f"{r['effective']}" + (f" (worst {worst})" if worst != r["effective"] else "")
 
 
+def fair_txt(r: dict) -> str:
+    """Fair price line for cards; empty without a price table."""
+    if r.get("fair"):
+        parts = " + ".join(f"{p} {e}" for p, e in r["fair_parts"].items())
+        sign = "+" if r["fair_delta"] >= 0 else "−"
+        trust = "" if r["fair_stated"] else " (parts partly assumed: not judged)"
+        tag = {"under": " · **underpriced**", "over": " · overpriced"}.get(r["value"], "")
+        return f"- Fair price ≈ {r['fair']} € ({parts}, table factor and base) · ask {sign}{abs(r['fair_delta']):.0%}{tag}{trust}"
+    if r.get("fair_missing"):
+        return f"- Fair price: not in the price table ({'; '.join(r['fair_missing'])})"
+    return ""
+
+
+def delta_txt(r: dict) -> str:
+    return "—" if r.get("fair_delta") is None else f"{r['fair_delta']:+.0%}"
+
+
 def intel_txt(r: dict) -> str:
     """Intel facts and the AM5 alternative, for cards; empty for other platforms."""
     i = r["build"].get("intel")
@@ -133,6 +152,7 @@ def card(i: int, r: dict) -> str:
         f"- Tier {rules.TIER_NAMES[r['tier']]} · day-one AI {r['ai']} · fixes {fixes_txt(r)} → effective "
         f"**{eff_txt(r)} €** · RAM path {path_txt(r)}",
         *([intel_txt(r)] if intel_txt(r) else []),
+        *([fair_txt(r)] if fair_txt(r) else []),
         f"- Unknowns: {unknown}{' (needs seller answers)' if r['needs_answers'] else ''} · flags: "
         f"{', '.join(r['flags']) or '—'}",
         f"\n> {text}\n",
@@ -181,6 +201,22 @@ def section_shortlist(featured: list[dict], others: list[dict]) -> str:
                 f"{', '.join(f for f in r['flags'] if f in ('needs_answers', 'dominated_by_tier12'))}"
                 for r in others[:NOT_FEATURED_SHOWN]]
     return "\n".join(out) + "\n"
+
+
+def section_underpriced(passed: list[dict], misses: list[dict], cfg) -> str:
+    """Listings asked well below their fair price: the likely good deals, passing first."""
+    meta = (cfg.prices or {}).get("meta")
+    head = "## B0. Underpriced against the fair price (likely good deals)\n\n"
+    if not meta:
+        return head + (f"No price table yet: fill {cfg.prices_file.name} with prompts/price_calibration.md "
+                       "(data: this run's components.csv).\n")
+    under = sorted((r for r in passed + misses if r.get("value") == "under"), key=lambda r: r["fair_delta"])
+    info = (f"Table {cfg.prices_file.name} from {meta.get('updated', '?')} (dataset {meta.get('dataset', '?')}). "
+            f"Underpriced = ask at least {cfg.policy.underpriced_pct} % below the fair price, key parts stated.\n\n")
+    lines = [f"- [{r['title'][:55]}]({r['url']}) — {ask_txt(r)} vs fair {r['fair']} € (**{delta_txt(r)}**) · "
+             f"{'passing, tier ' + str(r['tier']) if not r['reject'] else 'not passing: ' + r['reject']} · "
+             f"{build_cells(r)['ram']} · {build_cells(r)['gpu']}" for r in under]
+    return head + info + ("\n".join(lines) or "None in this run.") + "\n"
 
 
 def section_bundles(bundles: list[dict], policy) -> str:
@@ -270,7 +306,9 @@ def render(result: dict) -> str:
         f"{len(featured)} featured PCs, {len(others)} more passing, {len(bundles)} bundles ({policy.price_basis} "
         f"price ≤ {policy.limit} €). Code applied the Brief's rejects, fixes and tiers.\n",
         section_rules(policy),
-        section_pick(featured), section_shortlist(featured, others), section_bundles(bundles, policy),
+        section_pick(featured),
+        section_underpriced(result["passed"], [r for r in every if r["reject"] in ("over_budget", "am4_over_550")], cfg),
+        section_shortlist(featured, others), section_bundles(bundles, policy),
         section_questions(featured), section_special(result["final"], policy),
         section_market(result["snippet"], result["medians"], stats), section_log(stats, cfg), section_misses(every),
         section_filtered(every),
@@ -302,6 +340,7 @@ def write_run(runs_dir: Path, result: dict, suffix: str = "") -> Path:
     passed_ids = {r["ad_id"] for r in result["passed"]}   # finalized: featured, ranks, cross-listing flags
     _jsonl(folder / "listings.jsonl", result["passed"] + [r for r in result["final"] if r["ad_id"] not in passed_ids])
     _jsonl(folder / "raw.jsonl", (result["raw"].get(h["id"], h) for h in result["hits"]))
+    prices.write_components(folder / "components.csv", result["final"])
     settings = {k: (str(v) if isinstance(v, Path) else v) for k, v in dataclasses.asdict(result["cfg"]).items()}
     (folder / "run.json").write_text(json.dumps({"settings": settings, "stats": result["stats"]},
                                                 ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -315,7 +354,7 @@ def summary(result: dict, folder: Path) -> dict:
     lines = [f"{'INCOMPLETE RUN — ' if stats['incomplete'] else ''}"
              f"{'Re-evaluated ' + stats['review_of'] + ': ' if stats.get('review_of') else ''}{stats['unique']} listings, "
              f"full text {stats['details']} fetched + {stats.get('reused', 0)} reused, {len(featured)} featured PCs, "
-             f"{len(passed)} passing in total, "
+             f"{len(passed)} passing in total ({sum(r.get('value') == 'under' for r in passed)} underpriced), "
              f"{sum(r['special'] for r in result['final'])} special cases."]
     lines += [f"  {i}. {r['ask']:g} € ask · {eff_txt(r)} € eff · tier {r['tier']} · {r['title'][:60]}" for i, r in enumerate(featured[:5], 1)]
     top = sorted(stats["rejects"].items(), key=lambda x: -x[1])[:5]

@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+import prices
 from policy import DEFAULT_POLICY, PICKUP_CHOICES, PRICE_BASES, Policy
 
 ROOT = Path(__file__).parent
@@ -20,6 +21,7 @@ POLICY_KEYS = {
     "allow_oem": "rules.allow_oem", "allow_mini_pc": "rules.allow_mini_pc",
     "pickup_only": "rules.pickup_only",
     "misprice_share": "rules.misprice_share", "scam_signals_drop": "rules.scam_signals_drop",
+    "underpriced_pct": "prices.underpriced_pct", "overpriced_pct": "prices.overpriced_pct",
     "psu_min_w": "fixes.psu_min_w", "psu_min_24gb_w": "fixes.psu_min_24gb_w",
     "fix_psu": "fixes.psu_eur", "fix_psu_24gb": "fixes.psu_24gb_eur", "fix_cooler": "fixes.cooler_eur",
     "fix_ssd": "fixes.ssd_eur", "fix_gpu": "fixes.gpu_eur", "fix_case": "fixes.case_eur",
@@ -48,6 +50,8 @@ class Config:
     bundle_terms: tuple[str, ...]
     prompt_file: Path
     attach: tuple[Path, ...]
+    prices_file: Path = ROOT / "prices.toml"
+    prices: dict | None = None     # the loaded fair-price table; {} until it is filled in
 
 
 def _get(data: dict, key: str, kind: type | tuple, errors: list[str]):
@@ -81,13 +85,16 @@ def load(path: Path | None = None) -> Config:
         bundles_enabled=_get(data, "bundles.enabled", bool, e),
         bundle_category=_get(data, "bundles.category", str, e), bundle_terms=_get(data, "bundles.terms", list, e),
         prompt_file=_get(data, "ai.prompt", str, e), attach=_get(data, "ai.attach", list, e),
+        prices_file=_opt(data, "prices.file", "prices.toml", e),
     )
     policy = {f: _opt(data, key, getattr(DEFAULT_POLICY, f), e) for f, key in POLICY_KEYS.items()}
     if not e:
         e += _sanity(cfg, policy)
     if e:
         raise ValueError(f"{path.name} has problems:\n  - " + "\n  - ".join(e))
-    return Config(**{**cfg, "terms": tuple(cfg["terms"]), "broad_terms": tuple(cfg["broad_terms"]),
+    prices_file = ROOT / cfg["prices_file"]
+    return Config(**{**cfg, "prices_file": prices_file, "prices": prices.load(prices_file),
+                     "terms": tuple(cfg["terms"]), "broad_terms": tuple(cfg["broad_terms"]),
                      "bundle_terms": tuple(cfg["bundle_terms"]),
                      "prompt_file": ROOT / cfg["prompt_file"], "attach": tuple(ROOT / a for a in cfg["attach"]),
                      "policy": Policy(**policy)})
@@ -125,6 +132,8 @@ def _sanity(cfg: dict, policy: dict) -> list[str]:
         e.append("fixes.psu_min_w / psu_min_24gb_w: watts, 300-1600, the 24 GB one not lower")
     if not 0 <= policy["misprice_share"] <= 1:
         e.append("rules.misprice_share: between 0 (off) and 1")
+    if not (0 < policy["underpriced_pct"] < 100 and 0 < policy["overpriced_pct"]):
+        e.append("prices.underpriced_pct / overpriced_pct: percentages above 0 (underpriced below 100)")
     if policy["scam_signals_drop"] < 1:
         e.append("rules.scam_signals_drop: at least 1")
     if any(policy[f] < 0 for f in POLICY_KEYS if f.startswith("fix_")) or cfg["reuse_days"] < 0:

@@ -30,6 +30,9 @@ class Policy:
     # price sanity and risk (Priming §7.1)
     misprice_share: float = 0.5 # ask below this share of GPU + RAM value alone = a part price or a scam
     scam_signals_drop: int = 2  # this many scam signals drop a listing
+    # fair-price check (prices.toml, calibrated by hand): flags only, never a reject
+    underpriced_pct: int = 15   # ask this far below the fair price -> underpriced (a likely good deal)
+    overpriced_pct: int = 20    # ask this far above it -> overpriced
     # fix ledger (Brief §5, € estimates Nov 2026). Counted only when the listing confirms the deficit.
     psu_min_w: int = 650        # user default; the Brief says 750. A stated PSU below this is a counted fix
     psu_min_24gb_w: int = 850   # the same for a 24 GB card

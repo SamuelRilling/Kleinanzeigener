@@ -105,7 +105,7 @@ def test_run_folder_has_every_document(tmp_path: Path):
               "passed": [rec], "medians": {}, "seen": {}}
     folder = report.write_run(tmp_path, result)
     names = {p.name for p in folder.iterdir()}
-    assert names == {"results.md", "ai_prompt.md", "listings.jsonl", "raw.jsonl", "run.json"}
+    assert names == {"results.md", "ai_prompt.md", "listings.jsonl", "raw.jsonl", "run.json", "components.csv"}
     prompt = (folder / "ai_prompt.md").read_text(encoding="utf-8")
     assert prompt.startswith("# Used PC deal review") and "# Search results (this run)" in prompt and HIT["title"] in prompt
     assert json.loads((folder / "listings.jsonl").read_text(encoding="utf-8").splitlines()[0])["ad_id"] == "1"
