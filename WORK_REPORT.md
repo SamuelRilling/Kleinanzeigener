@@ -5,14 +5,32 @@ everything a final AI pass needs into one dated folder.
 
 ## Use
 
-1. Double-click `launch.bat`. The **Settings** tab shows `search.toml` as editable fields: home, budget,
-   AM4 RAM floor, price range, limits, bundles, and the three term lists. **Save and start search** validates,
-   saves (comments in the file are kept) and switches to **Run**: a live counter of listings found and full
-   listings read, the log, then a summary and **Open results**. Category, sort and AI files: **Open file**.
-   Console alternative: edit `search.toml`, then `python deals.py`.
-2. Search order: local sweep, specific terms (GPUs, AM5, RAM), bundles, then the broad terms ("PC",
-   "Rechner", …) last, so the request cap cuts the broadest searches first.
-3. Paste `runs/<date_time>/ai_prompt.md` into the AI.
+Double-click `launch.bat`. Four tabs:
+
+1. **Settings:** `search.toml` as editable fields (home, budget, price range, limits, full text, reuse, bundles,
+   the three term lists). **Save and start search** validates, saves (comments kept) and runs a new search.
+2. **Selection rules:** what gets discarded (AM4 RAM floor, VRAM minimum, Intel / Arc / 8500G / small cases /
+   OEM / mini-PCs on or off, mispricing share, scam signals) and the fix costs. Each rule shows how many listings
+   it drops in the chosen saved run. **Save rules and re-evaluate** judges that saved run again with no search and
+   no API calls (seconds), into `runs/<date_time>_review/`.
+3. **Run:** live counter (listings found, full listings read) and log.
+4. **Results:** any run as a table (featured, passing, bundles, special cases, closest misses, filtered).
+   Selecting a row shows its card and full listing text with clickable links; double-click opens the listing.
+   **Copy AI prompt** puts `ai_prompt.md` on the clipboard.
+
+Search order: local sweep, specific terms, bundles, then the broad terms ("PC", "Rechner", …) last.
+Console alternative: edit `search.toml`, then `python deals.py`.
+
+## Saved data and updates
+
+- **Every run folder is a dataset.** `raw.jsonl` holds every listing found, merged with its full text.
+  `full_text_all = true` reads the full text of every listing, so any rule can be loosened later offline.
+- **Re-evaluation** (Selection rules tab) applies the current rules to a saved dataset. It cannot see
+  listings sold or posted since that search, or listings outside its price range and terms.
+- **Updates instead of rescraping:** a new search always runs the searches (they find new listings, price
+  changes and removals), but reuses the saved full text of a listing with the same id and price read within
+  `reuse_days` (default 7). Full-text fetches were about 75 % of a run's API calls, so a repeat run within the
+  week needs only the searches plus the new or changed listings. Listings missing from the new search drop out.
 
 Tests (offline, no searches): `python -m pytest -q`
 
@@ -33,14 +51,15 @@ Tests (offline, no searches): `python -m pytest -q`
 | File | Role |
 |---|---|
 | `search.toml` / `config.py` | Settings; validated at load, every bad field reported at once; form saves are validated before the file is replaced |
+| `policy.py` | Every knob that decides what passes (budget, rules, fixes) and the list of changes from the Brief |
 | `text.py` | Shared primitives: clauses (spec lines), `Label:` lines, "not installed" context (limits, support notes, history), negation |
 | `parse.py` | Text → parts: GPU + VRAM twins, CPU/platform, chipset, RAM size/layout/DDR, PSU, cooler, SSD, case, text rejects |
 | `hardware.py` | Brief §1/§4 component knowledge: GPU cards (used value, PCIe lanes/gen, Brief note), PCIe link, upgrade headroom, parts-value floor |
 | `rules.py` | The Brief as code: hard rejects, price sanity, fix ledger → effective price, RAM path, tiers, tie-breakers, needs-answers ranking, featuring, special cases, bundle track, risk signals, seller questions |
 | `prompts/ai_pass.md` | The AI-pass priming: goal, user, market, how the program works and where it is weak, what to do, answer format |
-| `deals.py` | Search (local sweep + terms + bundles), dedupe, snippet triage, best-first detail fetch, run |
+| `deals.py` | Search, dedupe, full-text fetch with reuse, pure evaluation, re-evaluation of saved runs |
 | `report.py` | Run folder writer and launcher summary |
-| `ui.py` / `launch.bat` | Tkinter launcher (stdlib): settings form, live counter, log, summary |
+| `ui.py` / `ui_rules.py` / `ui_results.py` / `ui_form.py` / `launch.bat` | Tkinter launcher (stdlib): settings, selection rules, run, results tabs |
 
 ## How parsing stays robust
 

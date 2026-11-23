@@ -28,11 +28,14 @@ premium. Prices drift up month to month: a deal that clearly passes should not w
 ## How the program works
 1. Searched the PCs category (plus "Aufrüstkit"-style bundles in PC accessories) for GPU, AM5 and big-RAM terms,
    newest first, and marked listings within the local radius. The search log (F) has the settings and counts.
-2. Read each listing's text with pattern matching. No photos, no seller profile (only the rating % on the listing).
+2. Read each listing's full text with pattern matching (saved text is reused for unchanged listings). No photos,
+   no seller profile (only the rating % on the listing). A run can also be a re-evaluation of saved data with new
+   rules: then the search log says so, and listings sold or posted since that search are not reflected.
 3. Applied the Brief: hard rejects (§2), fixes added to the price (§5), tiers (§3, §6), ranking.
 4. Wrote the sections below. Featured listings and bundles get a verification card with the listing text.
 
-**Effective €** = ask, minus 10 % on VB listings, plus the fixes that count toward the limit:
+**Effective €** = ask, minus the VB haggle (10 % by default) on VB listings, plus the fixes that count toward the
+limit. Each listing's Fixes column shows the amounts used; the defaults:
 - PSU 95 € (120 € for a 24 GB card) unless a trusted brand of ≥ 750 W (≥ 850 W) is named. Trusted: be quiet! Pure/
   Straight/Dark Power (not System Power), Corsair RM/HX/AX/SF, Seasonic, MSI MAG A…GL, Cooler Master MWE Gold,
   FSP Hydro G.
@@ -45,14 +48,15 @@ The case of a complete PC is never priced; it shows under Headroom.
 **Limit:** the results header states it. Tier 0-1 listings may exceed it by a small stretch the user allowed for very
 good deals (flag `stretch_over_…`). AM4 with 64 GB+ (tier 4) has a lower cap of its own.
 
-**One Brief rule is loosened on purpose:** the Brief rejects AM4 below 64 GB; the user allows AM4 down to the RAM floor
-in the results header. Those builds are tier 5, ranked after everything else: a dead-end socket whose RAM upgrade is
-bought at today's prices. Pick one only when nothing on AM5 comes close, and say what it gives up.
+**Rules the user changed on purpose** are listed under "Selection rules changed from the Brief" at the top of the
+results. Apply them as given; never report them as errors. Builds they let through on a dead-end platform (AM4 below
+64 GB, Intel if allowed) are tier 5, ranked after everything else: the RAM upgrade is bought at today's prices and the
+socket is kept for good. Pick one only when nothing on AM5 comes close, and say what it gives up.
 
 **Assumptions** (shown as `(?)`): an unknown part is priced at its cheapest acceptable fix, not rejected. The
 exception: a listing must name a CPU and a GPU (bundles: a CPU), or it is rejected. Defaults when not stated:
 - RAM size → 16 GB; layout → the worst one (32 GB → 4×8).
-- RTX 3060 → 12 GB. 4060 Ti / 5060 Ti / 9060 XT → 8 GB, and 3080 → 10 GB: these are rejected.
+- RTX 3060 → 12 GB. 4060 Ti / 5060 Ti / 9060 XT → 8 GB, and 3080 → 10 GB: below the 12 GB minimum, so rejected.
 - A Ryzen with no model number → AM4 (worst case), unless an AM5 chipset or DDR5 is named.
 - A part the listing contradicts itself on (title 32 GB, text 16 GB) is assumed and flagged `conflict_…`.
 
@@ -77,14 +81,16 @@ featured only if effective + 490 € for RAM still beats the best tier 0-2 PC.
   - Buying signals: `act_fast` (tier 0-2 at or under target), `receipt`.
   - Data gaps: `needs_answers`, `conflict_…`, `…_missing` (seller says the part is not included; priced as a fix).
   - Hardware notes: `pcie_link_reduced`, `amd_gpu_secondary` (weaker for CUDA tools), `ram_slots_full`,
-    `a620_board_swap_later_…`, `beats_tier12_with_ram` / `dominated_by_tier12` (tier 3 only).
+    `a620_board_swap_later_…`, `beats_tier12_with_ram` / `dominated_by_tier12` (tier 3 only), and for builds the
+    user's rule changes let through: `vram_below_brief`, `intel_platform_allowed`.
+  - `preview_only`: judged on the short search preview, no full text was read. Treat its parts as unverified.
   - Risk: `shipping_only`, `seller_away`, `offplatform_payment`, `no_photos`, `too_cheap_vs_market`,
     `mining_or_24_7`, `smoker`, `commercial`.
   - Memory between runs: `new_since_last_run`, `price_drop_from_…`.
 
 ### Where the program is reliable, and where it is not
-- **Reliable:** the arithmetic, the rule order, rejects on clearly stated parts (Intel, < 12 GB VRAM, AM4 under the floor,
-  laptops, mini-PCs, OEM prebuilts), and duplicate listings.
+- **Reliable:** the arithmetic, the rule order, rejects on clearly stated parts (Intel, too little VRAM, AM4 under the
+  floor, laptops, mini-PCs, OEM prebuilts, unless the user allowed them), and duplicate listings.
 - **Check:**
   - Which GPU, CPU and RAM are really installed when the text is loose (upgrade stories, "passend für", option lists).
   - A good PSU brand outside the trusted list: priced as a fix that may not be needed.

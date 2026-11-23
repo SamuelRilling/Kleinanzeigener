@@ -13,19 +13,38 @@ am4_max_eur = 550             # cap for AM4 + 64 GB builds (tier 4)
 vb_discount = 0.10            # expected haggle on "VB" listings (0.05-0.15)
 special_max_eur = 800         # §6.3 special cases: effective + GPU fix must stay under this
 
-[rules]                       # deliberate loosening of the Brief (Target.md §2)
+[rules]                       # what gets discarded (Target.md §2). Changes from the Brief are listed in every report
 am4_min_ram_gb = 32           # AM4 PCs need at least this much RAM (Brief: 64). 32-48 GB AM4 builds pass as
                               # tier 5 (ranked last, normal limit). One of 16, 32, 48, 64
+min_vram_gb = 12              # smallest GPU VRAM kept (Brief: 12)
+allow_intel = false           # Intel platforms (Brief: reject; no AVX-512, no upgrade path). Allowed -> tier 5
+allow_arc = false             # Intel Arc GPUs (Brief: reject; Strata supports them on Linux only)
+allow_apu_x4 = false          # Ryzen 8500G/8300G (Brief: reject; GPU at PCIe 4.0 x4)
+allow_sff = false             # Mini-ITX / small cases (Brief: reject)
+allow_oem = false             # Dell/HP/Lenovo/... prebuilts (Brief: reject; proprietary parts)
+allow_mini_pc = false         # mini-PCs and handhelds (no GPU slot)
+misprice_share = 0.5          # ask below this share of what its GPU + RAM alone are worth = mispriced (0 = off)
+scam_signals_drop = 2         # this many scam signals drop a listing
+
+[fixes]                       # € added to the price for missing parts (Target.md §5)
+psu_eur = 95                  # 750 W Gold PSU
+psu_24gb_eur = 120            # 850 W Gold, for a 24 GB card
+cooler_eur = 30               # tower cooler for a 105 W+ CPU
+ssd_eur = 90                  # 1 TB NVMe
+gpu_eur = 220                 # used RTX 3060 12 GB (bundles, special cases)
+case_eur = 65                 # airflow case (bundles only)
 
 [search]
 category = "PCs"              # Elektronik > PCs
-ask_min_eur = 500             # asking price range searched
+ask_min_eur = 400             # asking price range searched
 ask_max_eur = 850             # above the limit on purpose: VB haggling and stretch deals
 sort = "DATE_DESCENDING"      # newest first
-pages_per_term = 10           # 30 ads per page
-max_requests = 400            # search requests per run, all terms together
-max_details = 450             # full listing fetches per run, best-ranked first
+pages_per_term = 100          # 30 ads per page
+max_requests = 3000           # search requests per run, all terms together
+max_details = 2000            # full listing fetches per run, best-ranked first
 delay_s = 0.3                 # pause between requests (be polite to the site)
+full_text_all = true          # read the full text of every listing, so any rule can be changed later offline
+reuse_days = 7                # reuse saved full text of an unchanged listing up to this age (0 = always fetch)
 # Matched against title + description. GPUs (8 GB twins included: the parser decides the VRAM),
 # AM5 words, and big RAM.
 terms = [
