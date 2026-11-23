@@ -63,7 +63,7 @@ ITX_RE = re.compile(r"(?<![A-Z])(?:MINI[\s-]?ITX|M-ITX|ITX|SFF|SMALL\s+FORM)(?![
 RAM_RES = [re.compile(r"(?<![\dX×])(?<![X×]\s)(\d{1,3})\s*GB\s*(?:DDR\d\S*\s*)?(?:RAM|ARBEITSSPEICHER|DDR\d)"),
            re.compile(r"(?<!\w)(?:RAM|ARBEITSSPEICHER)\s*:?\s*(\d{1,3})\s*GB"),
            # bare "32GB" (titles like "Ryzen 5 RTX 3060 32GB"), unless it names storage or VRAM
-           re.compile(r"(?<![\d.,X×])(?<![X×]\s)(16|32|48|64|96|128)\s*GB(?!\s*(?:SSD|NVME|M\.2|M2|HDD|FESTPLATTE|SPEICHER|VRAM|V-RAM|GDDR))")]
+           re.compile(r"(?<![\d.,X×])(?<![X×]\s)(16|32|48|64|96|128)\s*GB(?!\s*(?:SSD|NVME|M\.2|M2|HDD|FESTPLATTE|SPEICHER\b|VRAM|V-RAM|GDDR))")]
 RAM_KIT_RE = re.compile(r"(?<!\d)([1-4])\s*[X×]\s*(\d{1,2})\s*GB")
 RAM_VALID = {8, 12, 16, 24, 32, 48, 64, 96, 128}
 VRAM_CONTEXT_RE = re.compile(r"(?:(?:RTX|GTX|RX|RADEON|ARC)[\s-]*[AB]?\d{3,4}(?:\s*(?:TI|SUPER|XTX|XT|GRE))*"
