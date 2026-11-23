@@ -31,6 +31,24 @@ def test_table_shape_is_checked(tmp_path: Path):
     assert "whole_pc_factor" in str(exc.value) and "base_eur" in str(exc.value) and "RTX 4070" in str(exc.value)
 
 
+def test_sanity_check_marks_doubtful_parts(tmp_path: Path):
+    path = tmp_path / "prices.toml"
+    path.write_text('[meta]\nwhole_pc_factor = 1.0\nbase_eur = 100\nwarnings = ["only 40 rows"]\n'
+                    '[gpu]\n"RTX 4070" = { used = 400, check = "off", note = "above new" }\n'
+                    '[cpu]\n"Ryzen 5 7600" = { used = 120, check = "ok" }\n[ram]\n"DDR5 32 GB" = { used = 180 }\n'
+                    '[board]\n"B650" = { used = 100 }\n', encoding="utf-8")
+    table = prices.load(path)
+    assert table["checks"]["gpu"] == {"RTX 4070": "off: above new"} and table["meta"]["warnings"] == ["only 40 rows"]
+    r = assess(600, table)
+    assert r["value"] == "under" and "fair_price_doubtful" in r["flags"]
+    assert r["fair_doubts"] == ["gpu RTX 4070 (off: above new)"]
+    assert "fair_price_doubtful" not in assess(600)["flags"]
+    path.write_text('[meta]\nwhole_pc_factor = 1.0\nbase_eur = 100\n[gpu]\n"RTX 4070" = { used = 400, check = "bad" }\n',
+                    encoding="utf-8")
+    with pytest.raises(ValueError, match="check is one of"):
+        prices.load(path)
+
+
 def test_fair_price_from_parts():
     r = assess(800)
     assert r["fair"] == FAIR and r["fair_stated"] and r["fair_delta"] == round(800 / FAIR - 1, 3)

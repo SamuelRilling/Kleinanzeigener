@@ -60,6 +60,9 @@ GPU, CPU and RAM were read, not assumed, are judged:
 - `overpriced_…pct`: well above fair. A flag only; it may still be the best option.
 - `vb_target_from_fair_price`: a VB listing priced above fair; its expected price is the fair price, never more than
   15 % off the ask (instead of the flat haggle).
+- `fair_price_doubtful`: one of the build's part prices failed the calibrating agent's sanity check (off from
+  expectations, conflicting or thin data); the card names the part and why. Weigh that listing's Δ less, and read
+  any table warnings above B0.
 The table is an estimate from asking prices, not sold prices; its holdout error is in its header. Treat Δ as a strong
 hint, not a fact: a big negative Δ can also mean a misread part, so check those cards first.
 

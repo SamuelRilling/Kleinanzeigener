@@ -88,6 +88,7 @@ def fair_txt(r: dict) -> str:
         parts = " + ".join(f"{p} {e}" for p, e in r["fair_parts"].items())
         sign = "+" if r["fair_delta"] >= 0 else "−"
         trust = "" if r["fair_stated"] else " (parts partly assumed: not judged)"
+        trust += f" · ⚠ price check: {'; '.join(r['fair_doubts'])}" if r.get("fair_doubts") else ""
         tag = {"under": " · **underpriced**", "over": " · overpriced"}.get(r["value"], "")
         return f"- Fair price ≈ {r['fair']} € ({parts}, table factor and base) · ask {sign}{abs(r['fair_delta']):.0%}{tag}{trust}"
     if r.get("fair_missing"):
@@ -212,8 +213,11 @@ def section_underpriced(passed: list[dict], misses: list[dict], cfg) -> str:
                        "(data: this run's components.csv).\n")
     under = sorted((r for r in passed + misses if r.get("value") == "under"), key=lambda r: r["fair_delta"])
     info = (f"Table {cfg.prices_file.name} from {meta.get('updated', '?')} (dataset {meta.get('dataset', '?')}). "
-            f"Underpriced = ask at least {cfg.policy.underpriced_pct} % below the fair price, key parts stated.\n\n")
-    lines = [f"- [{r['title'][:55]}]({r['url']}) — {ask_txt(r)} vs fair {r['fair']} € (**{delta_txt(r)}**) · "
+            f"Underpriced = ask at least {cfg.policy.underpriced_pct} % below the fair price, key parts stated. "
+            f"Holdout error {meta.get('holdout_error', '?')}. ⚠ = a part's table price failed the sanity check.\n\n")
+    warnings = "".join(f"- ⚠ Table warning: {w}\n" for w in meta.get("warnings", []))
+    info += warnings + ("\n" if warnings else "")
+    lines = [f"- {'⚠ ' if r.get('fair_doubts') else ''}[{r['title'][:55]}]({r['url']}) — {ask_txt(r)} vs fair {r['fair']} € (**{delta_txt(r)}**) · "
              f"{'passing, tier ' + str(r['tier']) if not r['reject'] else 'not passing: ' + r['reject']} · "
              f"{build_cells(r)['ram']} · {build_cells(r)['gpu']}" for r in under]
     return head + info + ("\n".join(lines) or "None in this run.") + "\n"

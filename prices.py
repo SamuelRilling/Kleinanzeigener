@@ -11,12 +11,14 @@ import tomllib
 from pathlib import Path
 
 PARTS = ("gpu", "cpu", "ram", "board")
+CHECKS = ("ok", "off", "conflict", "missing")   # the calibrating agent's verdict per key
 CSV_FIELDS = ("ad_id", "ask", "vb", "reject", "track", "gpu", "cpu", "ram", "board", "stated", "title", "url")
 
 
 def load(path: Path) -> dict:
-    """prices.toml -> {"meta": {...}, "gpu": {key: used €}, ...}; {} when the file does not
-    exist yet. A wrong shape fails with one message per problem."""
+    """prices.toml -> {"meta": {...}, "gpu": {key: used €}, ..., "checks": {part: {key: "off: why"}}};
+    {} when the file does not exist yet. A wrong shape fails with one message per problem.
+    `checks` holds only the keys the agent's sanity check did not pass."""
     if not path.exists():
         return {}
     try:
@@ -28,15 +30,23 @@ def load(path: Path) -> dict:
         errors.append("meta.whole_pc_factor: a number between 0.5 and 1.5")
     if not isinstance(meta.get("base_eur"), int) or meta["base_eur"] < 0:
         errors.append("meta.base_eur: a whole number of euros, 0 or more")
-    table = {"meta": meta}
+    warnings = meta.get("warnings", [])
+    if not (isinstance(warnings, list) and all(isinstance(w, str) for w in warnings)):
+        errors.append("meta.warnings: a list of strings")
+    table = {"meta": meta, "checks": {}}
     for part in PARTS:
-        table[part] = {}
+        table[part], table["checks"][part] = {}, {}
         for key, entry in data.get(part, {}).items():
             used = entry.get("used") if isinstance(entry, dict) else None
             if not isinstance(used, int) or used <= 0:
                 errors.append(f"{part}.\"{key}\": needs used = <euros>")
             else:
                 table[part][key] = used
+            check = entry.get("check", "ok") if isinstance(entry, dict) else "ok"
+            if check not in CHECKS:
+                errors.append(f"{part}.\"{key}\": check is one of {', '.join(CHECKS)}")
+            elif check != "ok":
+                table["checks"][part][key] = f"{check}: {entry.get('note', 'no note')}"
     if errors:
         raise ValueError(f"{path.name} has problems:\n  - " + "\n  - ".join(errors))
     return table
@@ -63,7 +73,8 @@ def stated(b: dict) -> bool:
 
 
 def fair(b: dict, table: dict) -> dict | None:
-    """{eur, parts {part: €}, stated} or {eur: None, missing [...]}; None without a table."""
+    """{eur, parts {part: €}, stated, doubts [...]} or {eur: None, missing [...]}; None without a
+    table. `doubts`: this build's parts whose table price failed the agent's sanity check."""
     if not table:
         return None
     keys = part_keys(b)
@@ -71,9 +82,10 @@ def fair(b: dict, table: dict) -> dict | None:
     missing = [f"{p}: {keys[p]}" for p in PARTS if parts[p] is None]
     if missing:
         return {"eur": None, "missing": missing, "stated": False}
-    meta = table["meta"]
+    meta, checks = table["meta"], table.get("checks", {})
+    doubts = [f"{p} {keys[p]} ({checks[p][keys[p]]})" for p in PARTS if keys[p] in checks.get(p, {})]
     return {"eur": round(meta["whole_pc_factor"] * sum(parts.values()) + meta["base_eur"]), "parts": parts,
-            "stated": stated(b)}
+            "stated": stated(b), "doubts": doubts}
 
 
 def write_components(path: Path, records: list[dict]) -> None:

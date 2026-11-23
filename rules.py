@@ -449,7 +449,7 @@ def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None =
     }
     fp = prices.fair(b, table) if table and not bundle else None
     rec.update(fair=(fp or {}).get("eur"), fair_parts=(fp or {}).get("parts"), fair_missing=(fp or {}).get("missing"),
-               fair_stated=bool(fp and fp["stated"]))
+               fair_stated=bool(fp and fp["stated"]), fair_doubts=(fp or {}).get("doubts") or [])
     rec.update(fair_delta=round(ask / rec["fair"] - 1, 3) if rec["fair"] and ask else None)
     rec["value"] = value(rec["fair_delta"], rec["fair_stated"], policy)
     price = vb_price(ask, rec["fair"] if rec["fair_stated"] else None, policy) if vb else ask
@@ -506,6 +506,8 @@ def _flags(rec: dict, t: int | None, policy: Policy) -> list[str]:
         f.append("pickup_only")
     if rec["value"]:
         f.append(f"{rec['value']}priced_{abs(round(rec['fair_delta'] * 100))}pct")
+    if rec["fair_doubts"]:
+        f.append("fair_price_doubtful")
     if rec["vb"] and rec["fair_stated"] and rec["price"] < round(rec["ask"] * (1 - policy.vb_discount)):
         f.append("vb_target_from_fair_price")
     f += unconfirmed_flags(b, rec["maybe_fixes"])

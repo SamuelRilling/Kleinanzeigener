@@ -103,6 +103,9 @@ Tests (offline, no searches): `python -m pytest -q`
   set the `underpriced_…` / `overpriced_…` flags, only when GPU, CPU and RAM were stated. Flags only: nothing is
   dropped. Underpriced listings get section B0 and the Results tab's first group, and are featured even when they
   need seller answers.
+- After the fit the agent sanity-checks every key against expectations (used/new ratio, depreciation by age, family
+  order, spread, the rows' own text) and marks it `ok` / `off` / `conflict` / `missing` with a note, plus data-level
+  `meta.warnings`. Listings relying on a flagged price get `fair_price_doubtful` and a ⚠ in B0; warnings show above B0.
 - VB listings: expected price = the fair price when it is below the usual haggle, but at most 15 % off the ask.
 
 ## Ranking and featuring
