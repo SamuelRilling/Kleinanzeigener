@@ -3,33 +3,12 @@ hard rejects (§2), fix ledger -> effective price (§5), tiers (§3, §6),
 tie-breakers, special cases (Priming §6.3), risk signals (Priming §7) and
 seller questions (Priming §9C). Pure functions, no I/O."""
 import re
-from dataclasses import dataclass
 
 import hardware
 import parse
+from policy import DEFAULT_POLICY, Policy
 
-
-@dataclass(frozen=True)
-class Budget:
-    """Brief §0 / Priming §2. Defaults match the Brief; search.toml overrides them."""
-    limit: int = 700            # hard limit on effective price
-    target: int = 600           # "act fast" when a tier 0-2 deal lands at or below this
-    stretch: int = 75           # tier 0-1 deals may exceed the limit by this much (flagged)
-    am4_max: int = 550          # tier 4 cap (Brief §6)
-    vb_discount: float = 0.10   # realistic haggle on "VB" listings (Priming §6.1: 5-15 %)
-    special_max: int = 800      # §6.3 special case: effective + GPU fix must stay under this
-    am4_min_ram: int = 32       # AM4 RAM floor; the Brief's is 64 (below 64 passes as tier 5)
-
-
-DEFAULT_BUDGET = Budget()
-
-# ---- fix ledger (Brief §5; € estimates, Nov 2026) ----
-FIX_PSU = 95                 # 750 W Gold (80-110)
-FIX_PSU_3090 = 120           # 850 W Gold for a 24 GB card
-FIX_COOLER = 30              # tower cooler for a 105 W+ CPU (25-40)
-FIX_SSD = 90                 # 1 TB NVMe ("scan" in the Brief; SSD prices are up)
-FIX_GPU = 220                # used RTX 3060 12 GB: §6.3 special cases and the bundle track
-FIX_CASE = 65                # airflow case (50-80), bundle track only: a PC's case is never priced
+# RAM prices (Brief §5): path costs only, never counted toward the limit
 RAM_DDR5_2X16 = 490
 RAM_DDR5_2X32 = 950          # 900-1,000
 RAM_DDR4_2X16 = 285          # 200-370
@@ -41,14 +20,15 @@ PCIE5_CHIPSETS = hardware.PCIE5_CHIPSETS
 # already priced at their worst case, so they are asked about but cost no rank.
 CRITICAL_UNKNOWNS = {"gpu_vram", "cpu", "ram"}
 PLACEHOLDER_MAX = 20         # "1 €", "10 €": a price placeholder, never the real price
-MISPRICE_SHARE = 0.5         # ask below half the GPU + RAM value alone: a part price, a typo or a scam
 PRICE_SCOPE_RE = re.compile(
     r"preis\s+(?:gilt\s+)?(?:nur\s+)?f(?:ü|ue)r\s+(?:die\s+|den\s+|das\s+)?(?:grafikkarte|gpu|graka|cpu|prozessor|ram|"
     r"arbeitsspeicher|mainboard|netzteil|geh(?:ä|ae)use|einzel)|preis\s+pro\s+(?:st(?:ü|ue)ck|teil|komponente)|"
     r"st(?:ü|ue)ckpreis|einzelpreis|preise?\s+(?:siehe|laut)\s+(?:beschreibung|liste)|\bab\s+\d+\s*(?:€|euro)|anzahlung")
 BUNDLE_RE = re.compile(r"aufr(?:ü|ue)st[\s-]*(?:kit|set|pc|paket)|\bbundle\b|\bkit\b")
 TIER_NAMES = {0: "0 (24 GB NVIDIA)", 1: "1", 2: "2", 3: "3 (no day-one agent)", 4: "4 (AM4 64 GB+)",
-              5: "5 (AM4 under 64 GB)"}
+              5: "5 (dead-end platform: AM4 under 64 GB or Intel)"}
+# Text rejects a policy switch can turn off.
+FATAL_SWITCHES = {"oem_prebuilt": "allow_oem", "mini_pc_or_handheld": "allow_mini_pc"}
 
 SHIP_ONLY_RE = re.compile(r"nur\s+(?:per\s+)?versand|keine?\s+abholung|abholung\s+(?:ist\s+)?nicht\s+möglich")
 ABROAD_RE = re.compile(r"im\s+ausland|derzeit\s+(?:im\s+ausland|unterwegs)|beruflich\s+unterwegs")
@@ -112,24 +92,24 @@ def extract(title: str, desc: str) -> dict:
     }
 
 
-def hard_reject(b: dict, budget: "Budget", ignore_vram: bool = False) -> str | None:
-    """First Brief §2 hit, or None."""
+def hard_reject(b: dict, policy: Policy, ignore_vram: bool = False) -> str | None:
+    """First Brief §2 hit the policy still enforces, or None."""
     gpu, cpu, platform = b["gpu"], b["cpu"], b["platform"]["v"]
-    if platform == "INTEL":
+    if platform == "INTEL" and not policy.allow_intel:
         return "intel_platform"
     if not cpu:
         return "cpu_unknown"
     if not gpu:
         return "gpu_unknown"
-    if gpu["vendor"] == "intel":
+    if gpu["vendor"] == "intel" and not policy.allow_arc:
         return "intel_arc"
-    if gpu["vram"] < 12 and not ignore_vram:
-        return "vram_under_12gb"
-    if cpu.get("model") in APU_X4 and cpu.get("suffix") in ("G", "F"):
+    if gpu["vram"] < policy.min_vram and not ignore_vram:
+        return f"vram_under_{policy.min_vram}gb"
+    if cpu.get("model") in APU_X4 and cpu.get("suffix") in ("G", "F") and not policy.allow_apu_x4:
         return "apu_pcie_x4"
-    if platform == "AM4" and b["ram_gb"]["v"] < budget.am4_min_ram:
-        return f"am4_under_{budget.am4_min_ram}gb"
-    if b["itx"]:
+    if platform == "AM4" and b["ram_gb"]["v"] < policy.am4_min_ram:
+        return f"am4_under_{policy.am4_min_ram}gb"
+    if b["itx"] and not policy.allow_sff:
         return "itx_or_sff"
     return None
 
@@ -142,36 +122,36 @@ def as_bundle(b: dict, fatal: str | None, text: str) -> bool:
 
 
 def with_bought_gpu(b: dict) -> dict:
-    """The build as it will be: a used RTX 3060 12 GB added (FIX_GPU)."""
+    """The build as it will be: a used RTX 3060 12 GB added (policy.fix_gpu)."""
     gpu = {"name": "RTX 3060", "vendor": "nvidia", "vram": 12, "vram_stated": True, "in_desc": False,
            "conflict": False, "to_buy": True}
     return {**b, "gpu": gpu}
 
 
-def fixes(b: dict, bundle: bool = False) -> dict:
+def fixes(b: dict, policy: Policy = DEFAULT_POLICY, bundle: bool = False) -> dict:
     """{deficit: €} counting toward the limit (Brief §5)."""
     out = {}
     psu, gpu = b["psu"]["v"], b["gpu"] or {}
     need = 850 if gpu.get("vram", 0) >= 24 else 750
     if not (psu["trusted"] and (psu["watts"] or 0) >= need):
-        out["psu"] = FIX_PSU_3090 if need == 850 else FIX_PSU
+        out["psu"] = policy.fix_psu_24gb if need == 850 else policy.fix_psu
     cpu = b["cpu"] or {}
     hot = cpu.get("suffix") == "X3D" or (cpu.get("suffix") == "X" and (cpu.get("model") or "")[:1] == "7") \
         or (cpu.get("model") or "") in ("9900", "9950")
     if hot and b["cooler"]["v"] != "tower":
-        out["cooler"] = FIX_COOLER
+        out["cooler"] = policy.fix_cooler
     st = b["storage"]["v"]
     if not (st["nvme"] and (st["gb"] or 0) >= 960):
-        out["ssd"] = FIX_SSD
+        out["ssd"] = policy.fix_ssd
     if bundle:
-        out["gpu"] = FIX_GPU
+        out["gpu"] = policy.fix_gpu
         if not b["case"]["name"]:
-            out["case"] = FIX_CASE
+            out["case"] = policy.fix_case
     return out
 
 
 def ram_path(b: dict) -> dict:
-    """€ to reach 32 GB and 64 GB (outside the budget, Brief §5). 2×24 GB has no
+    """€ to reach 32 GB and 64 GB (outside the policy, Brief §5). 2×24 GB has no
     64 GB step: its path is a second 2×24 kit to 96 GB, which the Brief does not price."""
     gb, (sticks, per) = b["ram_gb"]["v"], b["ram_layout"]["v"]
     if gb == 48 and sticks == 2:
@@ -212,6 +192,8 @@ def tier(b: dict) -> int | None:
         return 0
     if platform == "AM4":
         return 4 if gb >= 64 else 5   # 5: AM4 below the Brief's 64 GB, allowed by settings
+    if platform == "INTEL":
+        return 5                      # allowed by settings only: dead-end platform
     if platform != "AM5":
         return None
     if gb < 32:
@@ -313,7 +295,7 @@ def seller_message(unknown: list[str], ships: bool, mining_flag: bool) -> str:
 TOO_CHEAP = 0.65             # ask below 65 % of the same-GPU median ask = scam signal (Priming §7.1)
 
 
-def price_reject(ask: int, desc: str, floor: int) -> str | None:
+def price_reject(ask: int, desc: str, floor: int, share: float = DEFAULT_POLICY.misprice_share) -> str | None:
     """The asking price is not the price of this whole PC: missing, a placeholder,
     explicitly a part price, or far below what its GPU + RAM alone are worth."""
     if not ask:
@@ -322,12 +304,12 @@ def price_reject(ask: int, desc: str, floor: int) -> str | None:
         return "placeholder_price"
     if PRICE_SCOPE_RE.search(desc.lower()):
         return "price_not_for_whole_pc"
-    if floor and ask < MISPRICE_SHARE * floor:
+    if floor and ask < share * floor:
         return "price_below_parts_value"
     return None
 
 
-def assess(ad: dict, budget: Budget = DEFAULT_BUDGET, gpu_median: float | None = None) -> dict:
+def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None = None) -> dict:
     """One listing (search hit or detail) -> assessed record. `reject` is set when
     it fails; `special` for a §6.3 arbitrage case; `track` is "pc" or "bundle".
     `gpu_median`: median ask of PCs with the same GPU in this scan."""
@@ -337,6 +319,8 @@ def assess(ad: dict, budget: Budget = DEFAULT_BUDGET, gpu_median: float | None =
     vb = ad.get("price_type") == "PLEASE_CONTACT"
     b = extract(title, desc)
     fatal = parse.fatal_reason(title, desc, attrs)
+    if fatal in FATAL_SWITCHES and getattr(policy, FATAL_SWITCHES[fatal]):
+        fatal = None
     bundle = as_bundle(b, fatal, f"{title}\n{desc}")
     if bundle:
         b, fatal = with_bought_gpu(b), None
@@ -350,41 +334,41 @@ def assess(ad: dict, budget: Budget = DEFAULT_BUDGET, gpu_median: float | None =
         "track": "bundle" if bundle else "pc",
         "ships": attrs.get("Versand") == "Versand möglich" or bool(ad.get("shipping_options")),
         "commercial": ad.get("seller_account_type") == "COMMERCIAL",
-        "build": b, "scam": scam, "cond": cond, "description": desc,
+        "build": b, "scam": scam, "cond": cond, "description": desc, "full_text": "attributes" in ad,
         "reject": None, "special": False, "tier": None, "flags": [],
     }
-    price = round(ask * (1 - budget.vb_discount)) if vb else ask
-    fx = fixes(b, bundle)
+    price = round(ask * (1 - policy.vb_discount)) if vb else ask
+    fx = fixes(b, policy, bundle)
     rec.update(price=price, fixes=fx, effective=price + sum(fx.values()), path=ram_path(b),
                ai=ai_tier(b), unknown=unknowns(b))
     rec.update(needs_answers=bool(CRITICAL_UNKNOWNS & set(rec["unknown"])), featured=False,
                link=hardware.pcie_link(b) if b["gpu"] else None, headroom=hardware.headroom(b),
                gpu_note=hardware.card(b["gpu"]).note, parts_floor=hardware.parts_floor(b))
-    rec["reject"] = (fatal or price_reject(ask, desc, rec["parts_floor"]) or hard_reject(b, budget)
-                     or ("scam_signals" if len(scam) >= 2 else None))
-    if rec["reject"] == "vram_under_12gb" and not hard_reject(b, budget, ignore_vram=True) \
-            and b["ram_gb"]["v"] >= 48 and rec["effective"] + FIX_GPU <= budget.special_max:
+    rec["reject"] = (fatal or price_reject(ask, desc, rec["parts_floor"], policy.misprice_share)
+                     or hard_reject(b, policy) or ("scam_signals" if len(scam) >= policy.scam_signals_drop else None))
+    if (rec["reject"] or "").startswith("vram_under_") and not hard_reject(b, policy, ignore_vram=True) \
+            and b["ram_gb"]["v"] >= 48 and rec["effective"] + policy.fix_gpu <= policy.special_max:
         rec["special"] = True
     if rec["reject"]:
         return rec
     t = tier(b)
-    limit = budget.limit + (budget.stretch if t is not None and t <= 1 else 0)
+    limit = policy.limit + (policy.stretch if t is not None and t <= 1 else 0)
     if t is None:
         rec["reject"] = "platform_unknown"
-    elif t == 4 and rec["effective"] > budget.am4_max:
+    elif t == 4 and rec["effective"] > policy.am4_max:
         rec["reject"] = "am4_over_550"
     elif rec["effective"] > limit:
         rec["reject"] = "over_budget"
     rec["tier"] = t
-    rec["flags"] = _flags(rec, t, budget)
+    rec["flags"] = _flags(rec, t, policy)
     return rec
 
 
-def _flags(rec: dict, t: int | None, budget: Budget) -> list[str]:
+def _flags(rec: dict, t: int | None, policy: Policy) -> list[str]:
     b, f = rec["build"], []
-    if rec["effective"] > budget.limit:
-        f.append(f"stretch_over_{budget.limit}")
-    if t is not None and t <= 2 and rec["effective"] <= budget.target:
+    if rec["effective"] > policy.limit:
+        f.append(f"stretch_over_{policy.limit}")
+    if t is not None and t <= 2 and rec["effective"] <= policy.target:
         f.append("act_fast")
     if b["chipset"] == "A620":
         f.append(f"a620_board_swap_later_{BOARD_SWAP_A620}")
@@ -392,6 +376,12 @@ def _flags(rec: dict, t: int | None, budget: Budget) -> list[str]:
         f.append("pcie_link_reduced")
     if b["gpu"]["vendor"] == "amd":
         f.append("amd_gpu_secondary")
+    if b["gpu"]["vram"] < 12:
+        f.append("vram_below_brief")
+    if b["platform"]["v"] == "INTEL":
+        f.append("intel_platform_allowed")
+    if not rec["full_text"]:
+        f.append("preview_only")
     if b["ram_layout"]["v"][0] == 4:
         f.append("ram_slots_full")
     if rec["needs_answers"]:
@@ -401,7 +391,7 @@ def _flags(rec: dict, t: int | None, budget: Budget) -> list[str]:
     return f + rec["scam"] + rec["cond"] + (["commercial"] if rec["commercial"] else [])
 
 
-def finalize(passed: list[dict], budget: Budget = DEFAULT_BUDGET) -> list[dict]:
+def finalize(passed: list[dict], policy: Policy = DEFAULT_POLICY) -> list[dict]:
     """Rank the passing listings and decide which are featured (new records, inputs untouched).
     - Tier 3 (16 GB) counts only if effective + the RAM step still beats the best
       tier 0-2 PC (Brief §6.3); otherwise it is flagged and not featured.
@@ -415,7 +405,7 @@ def finalize(passed: list[dict], budget: Budget = DEFAULT_BUDGET) -> list[dict]:
             beats = r["effective"] + RAM_DDR5_2X16 < best
             flags.append("beats_tier12_with_ram" if beats else "dominated_by_tier12")
             featured = beats
-        if r["needs_answers"] and not (r["tier"] <= 1 or r["effective"] <= budget.target):
+        if r["needs_answers"] and not (r["tier"] <= 1 or r["effective"] <= policy.target):
             featured = False
         out.append({**r, "flags": flags, "featured": featured})
     return out

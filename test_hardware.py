@@ -97,7 +97,7 @@ def test_am4_32gb_passes_as_tier5_by_default():
 
 
 def test_am4_floor_follows_settings():
-    strict = rules.Budget(am4_min_ram=64)   # the Brief's own rule
+    strict = rules.Policy(am4_min_ram=64)   # the Brief's own rule
     r = rules.assess({**BASE, "id": "x", "title": "Ryzen 7 5700X RTX 3060 12GB 32GB DDR4 B550"}, strict)
     assert r["reject"] == "am4_under_64gb"
 

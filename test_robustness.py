@@ -66,14 +66,14 @@ def test_conflict_becomes_an_unknown_not_a_reject():
 def test_missing_psu_is_priced():
     r = rules.assess({"title": "Ryzen 5 7600 RTX 3060 12GB 32GB DDR5", "description": "ohne Netzteil",
                       "price_amount": 300, "image_count": 3})
-    assert r["fixes"]["psu"] == rules.FIX_PSU and "psu_missing" in r["flags"]
+    assert r["fixes"]["psu"] == rules.DEFAULT_POLICY.fix_psu and "psu_missing" in r["flags"]
 
 
 def test_bundle_track_prices_gpu_and_case():
     r = rules.assess({"title": "AM5 Aufrüstkit Ryzen 5 7600 + B650 + 32GB DDR5", "description": "2x16GB",
                       "price_amount": 200, "image_count": 3})
     assert r["track"] == "bundle" and r["reject"] is None and r["tier"] == 2
-    assert r["fixes"]["gpu"] == rules.FIX_GPU and r["fixes"]["case"] == rules.FIX_CASE
+    assert r["fixes"]["gpu"] == rules.DEFAULT_POLICY.fix_gpu and r["fixes"]["case"] == rules.DEFAULT_POLICY.fix_case
 
 
 def test_gpu_less_intel_is_not_a_bundle():
@@ -82,7 +82,7 @@ def test_gpu_less_intel_is_not_a_bundle():
 
 
 def test_budget_comes_from_config():
-    tight = rules.Budget(limit=400, target=300)
+    tight = rules.Policy(limit=400, target=300)
     r = rules.assess({"title": "Ryzen 5 7600 RTX 3060 12GB 32GB DDR5", "description": "", "price_amount": 300,
                       "image_count": 3}, tight)
     assert r["reject"] == "over_budget"  # 300 + PSU + SSD fixes > 400

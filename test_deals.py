@@ -142,7 +142,7 @@ def test_tier1_passes_with_vb_price():
 def test_unknown_parts_are_priced_not_rejected():
     r = rules.assess({**GOOD, "description": "Top Zustand", "price_type": "FIXED", "price_amount": 450})
     assert r["reject"] is None
-    assert r["fixes"] == {"psu": rules.FIX_PSU, "ssd": rules.FIX_SSD}
+    assert r["fixes"] == {"psu": rules.DEFAULT_POLICY.fix_psu, "ssd": rules.DEFAULT_POLICY.fix_ssd}
     assert r["tier"] == 2  # 16 GB card, but the PSU is unverified -> not tier 1
     assert r["build"]["ram_layout"] == {"v": (4, 8), "src": "assumed"}  # worst case for "32 GB"
     assert {"ram_layout", "board", "psu", "storage", "case"} <= set(r["unknown"]) and not r["needs_answers"]
@@ -164,7 +164,7 @@ def test_hard_rejects(title, reason):
 def test_am4_64gb_is_tier4_under_550():
     r = rules.assess({"title": "Ryzen 7 5700X RTX 3060 12GB 64GB DDR4 B550", "description": "",
                       "price_amount": 300, "image_count": 3})
-    assert r["reject"] is None and r["tier"] == 4 and r["effective"] == 300 + rules.FIX_PSU + rules.FIX_SSD
+    assert r["reject"] is None and r["tier"] == 4 and r["effective"] == 300 + rules.DEFAULT_POLICY.fix_psu + rules.DEFAULT_POLICY.fix_ssd
 
 
 def test_3090_jumps_to_tier0_and_may_stretch():
