@@ -1,6 +1,7 @@
 """Scan result -> runs/<date_time>/:
     results.md      human-readable report, Priming Brief §9 order
     ai_prompt.md    static AI instructions (prompts/ai_pass.md) + attached rules + results.md
+    offer_prompt.md / performance_prompt.md   the same with prompts/best_offer.md / best_performance.md
     listings.jsonl  every assessed listing (parsed build, fixes, verdict)
     components.csv  every listing's parts in the price table's names: data for price calibration
     raw.jsonl       raw search hit + full detail per fetched listing
@@ -17,6 +18,9 @@ import prices
 import rules
 from policy import Policy, deviations
 from text import CLAUSE_SPLIT_RE
+
+# Comparison passes: run-folder file <- prompt file next to the main AI prompt.
+EXTRA_PROMPTS = {"offer_prompt.md": "best_offer.md", "performance_prompt.md": "best_performance.md"}
 
 SHORTLIST = 10        # featured listings shown with a card and full text
 BUNDLES_SHOWN = 5
@@ -319,10 +323,11 @@ def render(result: dict) -> str:
     ])
 
 
-def ai_prompt(result_md: str, cfg) -> str:
-    """Static instructions + attached rule files + this run's results, ready to paste."""
-    parts = [cfg.prompt_file.read_text(encoding="utf-8") if cfg.prompt_file.exists()
-             else f"(prompt file {cfg.prompt_file.name} not found)"]
+def ai_prompt(result_md: str, cfg, prompt_file: Path | None = None) -> str:
+    """Static instructions (the main AI prompt unless given) + attached rule files + this run's results."""
+    prompt_file = prompt_file or cfg.prompt_file
+    parts = [prompt_file.read_text(encoding="utf-8") if prompt_file.exists()
+             else f"(prompt file {prompt_file.name} not found)"]
     for path in cfg.attach:
         body = path.read_text(encoding="utf-8") if path.exists() else "(file not found)"
         parts.append(f"\n---\n\n# Attached: {path.name}\n\n{body}")
@@ -341,6 +346,9 @@ def write_run(runs_dir: Path, result: dict, suffix: str = "") -> Path:
     md = render(result)
     (folder / "results.md").write_text(md, encoding="utf-8")
     (folder / "ai_prompt.md").write_text(ai_prompt(md, result["cfg"]), encoding="utf-8")
+    for name, source in EXTRA_PROMPTS.items():
+        (folder / name).write_text(ai_prompt(md, result["cfg"], result["cfg"].prompt_file.parent / source),
+                                   encoding="utf-8")
     passed_ids = {r["ad_id"] for r in result["passed"]}   # finalized: featured, ranks, cross-listing flags
     _jsonl(folder / "listings.jsonl", result["passed"] + [r for r in result["final"] if r["ad_id"] not in passed_ids])
     _jsonl(folder / "raw.jsonl", (result["raw"].get(h["id"], h) for h in result["hits"]))

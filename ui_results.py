@@ -60,7 +60,12 @@ class ResultsTab(ttk.Frame):
         self.run_box = ttk.Combobox(top, textvariable=self.run_var, width=28, state="readonly")
         self.run_box.pack(side="left", padx=6)
         self.run_box.bind("<<ComboboxSelected>>", lambda _: self.show(deals.RUNS_DIR / self.run_var.get()))
-        ttk.Button(top, text="Copy AI prompt", command=self.copy_prompt).pack(side="left", padx=(12, 0))
+        ttk.Button(top, text="Copy AI prompt", command=lambda: self.copy_prompt("ai_prompt.md")).pack(
+            side="left", padx=(12, 0))
+        ttk.Button(top, text="Copy offer prompt", command=lambda: self.copy_prompt("offer_prompt.md")).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(top, text="Copy performance prompt",
+                   command=lambda: self.copy_prompt("performance_prompt.md")).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Copy price prompt", command=self.copy_price_prompt).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Open results.md", command=lambda: self._open("results.md")).pack(side="left", padx=6)
         ttk.Button(top, text="Open folder", command=lambda: self._open("")).pack(side="left")
@@ -161,12 +166,18 @@ class ResultsTab(ttk.Frame):
         self.clipboard_append(text)
         self.summary.configure(text="Price calibration prompt copied, pointed at " + self.folder.name + ".")
 
-    def copy_prompt(self) -> None:
+    def copy_prompt(self, name: str) -> None:
+        """A prompt file of this run; runs made before the comparison prompts have only ai_prompt.md."""
         if not self.folder:
             return
+        path = self.folder / name
+        head = self.summary.cget("text").split("\n")[0]
+        if not path.exists():
+            self.summary.configure(text=head + f"\n{name} is not in this run (an older run): re-evaluate it to add it.")
+            return
         self.clipboard_clear()
-        self.clipboard_append((self.folder / "ai_prompt.md").read_text(encoding="utf-8"))
-        self.summary.configure(text=self.summary.cget("text").split("\n")[0] + "\nAI prompt copied to the clipboard.")
+        self.clipboard_append(path.read_text(encoding="utf-8"))
+        self.summary.configure(text=head + f"\n{name} copied to the clipboard.")
 
     def _open(self, name: str) -> None:
         if self.folder:
