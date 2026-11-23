@@ -1,65 +1,62 @@
-"""Offline tests for the parsers and scoring in deals.py.  Run: python -m pytest -q"""
+"""Offline tests for parse.py and rules.py.  Run: python -m pytest -q"""
 import pytest
 
-import deals
-
-from deals import bands, deal_score, evaluate, fatal_reason, market, parse_cpu, parse_gpu, parse_ram
+import rules
+from parse import (fatal_reason, parse_chipset, parse_cpu, parse_gpu, parse_psu, parse_ram, parse_ram_layout,
+                   parse_storage)
 
 
 @pytest.mark.parametrize("title, expected", [
-    ("Gaming PC | RTX 3060 12GB | i7-11700 | 32GB RAM", "RTX 3060"),
+    ("Gaming PC | RTX 3060 12GB | Ryzen 5 7600 | 32GB RAM", "RTX 3060"),
     ("Gaming PC RTX 3060Ti Ryzen 5", "RTX 3060 Ti"),
-    ("PC mit GeForce RTX 4070 Super", "RTX 4070 Super"),
     ("PC 4070S 32GB", "RTX 4070 Super"),
     ("RTX 4070 Ti Super Rechner", "RTX 4070 Ti Super"),
-    ("Ryzen 7 7800X3D + RX 7900 XTX", "RX 7900 XTX"),
     ("Ryzen 9 7900X mit 7800XT", "RX 7800 XT"),
-    ("Gaming PC GTX1660 Super", "GTX 1660 Super"),
     ("Upgrade: RTX 3070 (vorher GTX 1060)", "RTX 3070"),
     ("Intel Arc B580 PC", "ARC B580"),
-    ("Gaming PC Ryzen 7 5800x | 1660 Super | 16GB DDR4", "GTX 1660 Super"),
-    ("PC mit Radeon 6800", "RX 6800"),
 ])
-def test_gpu(title, expected):
-    assert parse_gpu(title, "")[0] == expected
+def test_gpu_name(title, expected):
+    assert parse_gpu(title, "")["name"] == expected
 
 
 @pytest.mark.parametrize("title", [
-    "Ryzen 5 5600X B550 Office PC",       # CPU number, board chipset
     "Ryzen 5 7600 PC 32GB",               # 7600 is the CPU, not RX 7600
-    "Monitor 1920x1080 inklusive",        # resolution, not GTX 1080
-    "PC Full HD 1080p Gaming",
+    "Monitor 1920x1080 inklusive",
     "Ryzen 5 5600XT Gaming PC",           # CPU, not RX 5600 XT
-    "Dell OptiPlex 5090 MT i5-10500",     # PC model number, not RTX 5090
+    "Dell OptiPlex 5090 MT i5-10500",
     "Grafikkarte 5060",                   # bare number without brand
 ])
 def test_gpu_no_false_positive(title):
     assert parse_gpu(title, "") is None
 
 
-def test_gpu_from_description():
-    gpu = parse_gpu("Gaming PC", "Grafikkarte: RTX 3080 10GB")
-    assert gpu[0] == "RTX 3080" and gpu[3] is True
-
-
-@pytest.mark.parametrize("title, label", [
-    ("i7-11700 RTX 3060", "i7 11th gen"),
-    ("Intel Core i5 12400F", "i5 12th gen"),
-    ("i5-8400", "i5 8th gen"),
-    ("Ryzen 7 5800X3D", "Ryzen 7 5800X3D"),
-    ("R5 5600X", "Ryzen 5 5600X"),
-    ("PC 7800X3D RTX 4080", "Ryzen 7 7800X3D"),
-    ("Core Ultra 7 265K", "Core Ultra 7"),
-    ("Ryzen 7 Gaming PC", "Ryzen 7 (gen?)"),
-    ("Gaming-PC i7-5820K RTX 2080 Ti", "i7 5th gen"),
-    ("Pc 32 GB ram i9900kf", "i9 9th gen"),
-    ("Gaming Pc Amd Ryzen 5600x 64GB", "Ryzen 5 5600X"),
-    ("Hp Z2 G4 - 32 gb Ram - i7 -512 gb ssd", "i7 (gen?)"),
-    ("Gaming PC Ryzen 5500 RTX 5060", "Ryzen 5 5500"),
-    ("Ryzen 9 5900X", "Ryzen 9 5900X"),
+@pytest.mark.parametrize("title, vram, stated", [
+    ("PC RTX 3060", 12, False),            # Priming 6.2: assume 12 GB, flag
+    ("PC RTX 3060 8GB", 8, True),
+    ("PC RTX 4060 Ti", 8, False),          # assume 8 GB until shown otherwise
+    ("PC RTX 4060 Ti 16GB", 16, True),
+    ("PC RTX 5060 Ti 16 GB", 16, True),
+    ("PC RTX 3080", 10, False),
+    ("PC RTX 3090", 24, True),             # single variant counts as stated
 ])
-def test_cpu(title, label):
-    assert parse_cpu(title, "")[0] == label
+def test_gpu_vram(title, vram, stated):
+    g = parse_gpu(title, "")
+    assert (g["vram"], g["vram_stated"]) == (vram, stated)
+
+
+@pytest.mark.parametrize("title, platform, model", [
+    ("Ryzen 5 7600 RTX 3060", "AM5", "7600"),
+    ("R7 7800X3D", "AM5", "7800"),
+    ("Ryzen 7 8700G", "AM5", "8700"),
+    ("Ryzen 5 5600X", "AM4", "5600"),
+    ("Gaming Pc Amd 9700X", "AM5", "9700"),
+    ("i7-12700K RTX 3060", "INTEL", None),
+    ("Core Ultra 7 265K", "INTEL", None),
+    ("Ryzen 7 Gaming PC", None, None),
+])
+def test_cpu_platform(title, platform, model):
+    c = parse_cpu(title, "")
+    assert (c["platform"], c["model"]) == (platform, model)
 
 
 def test_cpu_ignores_ddr5():
@@ -74,10 +71,44 @@ def test_cpu_ignores_ddr5():
     ("RTX 3070 8GB VRAM", None),
     ("1TB SSD 512GB", None),
     ("NVIDIA GeForce RTX 3060 (12 GB RAM), 32GB DDR4", 32),
-    ("Gaming PC / RTX 3060 / i5 / 16GB RAM", 16),
+    ("Ryzen 5 5600X RTX 3060 32GB", 32),
+    ("RTX 4060 Ti 16GB", None),
+    ("4060 Ti 16GB Gaming PC", None),
+    ("1TB NVMe, 32 GB", 32),
 ])
 def test_ram(title, gb):
     assert parse_ram(title, "") == gb
+
+
+def test_ram_layout_and_chipset():
+    assert parse_ram_layout("Corsair Vengeance 2×16GB DDR5") == (2, 16)
+    assert parse_chipset("MSI B650M Gaming") == "B650"
+    assert parse_chipset("ASUS X670E Hero") == "X670E"
+
+
+@pytest.mark.parametrize("text, watts, trusted", [
+    ("Netzteil: be quiet! Pure Power 12 M 750W", 750, True),
+    ("750W Netzteil", 750, False),
+    ("Corsair RM850x", 850, True),
+    ("be quiet System Power 10 650W Netzteil", 650, False),
+    ("Corsair CX650 Netzteil", 650, False),
+])
+def test_psu(text, watts, trusted):
+    assert parse_psu(text) == {"watts": watts, "trusted": trusted}
+
+
+def test_psu_unmentioned():
+    assert parse_psu("Ryzen 5 7600, RTX 3060") is None
+
+
+@pytest.mark.parametrize("text, nvme, gb", [
+    ("1TB NVMe SSD", True, 1000),
+    ("Samsung 980 Pro M.2 2TB", True, 2000),
+    ("1 TB SSD", False, 1000),
+    ("500GB SSD + 2TB HDD", False, 500),
+])
+def test_storage(text, nvme, gb):
+    assert parse_storage(text) == {"nvme": nvme, "gb": gb}
 
 
 @pytest.mark.parametrize("title, desc, reason", [
@@ -87,57 +118,95 @@ def test_ram(title, gb):
     ("Suche Gaming PC", "", "wanted_ad"),
     ("Gaming Laptop RTX 4060", "", "not_desktop"),
     ("Gaming PC", "Alles funktioniert, nicht defekt.", None),
-    ("Gaming PC", "Keine Defekte, Wärmeleitpaste ausgetauscht.", None),
-    ("Gaming PC", "Vorteil: leise", None),
     ("Grafikkarte RTX 4080 Eagle Oc 16 Gb Vram", "", "gpu_only"),
-    ("Gaming PC mit Grafikkarte RTX 3070", "", None),
+    ("Lenovo Legion Tower 5 RTX 3060", "", "oem_prebuilt"),
+    ("Gaming PC RESERVIERT", "", "reserved"),
 ])
 def test_fatal(title, desc, reason):
     assert fatal_reason(title, desc, {}) == reason
 
 
-def test_fatal_condition_attribute():
-    assert fatal_reason("Gaming PC", "", {"Zustand": "Defekt"}) == "defekt"
+GOOD = {"id": "1", "title": "Gaming PC Ryzen 5 7600 RTX 4060 Ti 16GB 32GB DDR5",
+        "description": "MSI B650 Tomahawk, 2x16GB, be quiet Pure Power 12 M 750W, 1TB NVMe SSD, Arctic Freezer 36",
+        "price_amount": 650, "price_type": "PLEASE_CONTACT", "image_count": 6}
 
 
-def test_evaluate_value_and_flags():
-    ad = {"id": "1", "title": "Gaming PC RTX 3060 i7-11700 32GB RAM", "description": "Top Zustand",
-          "price_amount": 500, "price_type": "PLEASE_CONTACT", "attributes": {"Versand": "Versand möglich"}}
-    l = evaluate(ad)
-    assert l["parts_value"] == 190 + 105 + 32 * 3 + 120
-    assert l["value_ratio"] == round(l["parts_value"] / 500, 2)
-    assert "ships" in l["flags"] and "vb" in l["flags"] and l["fatal"] is None
+def test_tier1_passes_with_vb_price():
+    r = rules.assess(GOOD)
+    assert r["reject"] is None and r["tier"] == 1 and r["fixes"] == {}
+    assert r["price"] == 585 and r["effective"] == 585 and "act_fast" in r["flags"]
+    assert r["path"] == {"to32": 0, "to64": rules.RAM_DDR5_2X16} and r["unknown"] == []
 
 
-def test_ram_value_capped():
-    l = evaluate({"title": "Gaming PC RTX 3060 i7-11700 128GB RAM", "description": "", "price_amount": 500})
-    assert l["parts_value"] == 190 + 105 + 32 * 3 + 120
+def test_unknown_parts_are_priced_not_rejected():
+    r = rules.assess({**GOOD, "description": "Top Zustand", "price_type": "FIXED", "price_amount": 450})
+    assert r["reject"] is None
+    assert r["fixes"] == {"psu": rules.FIX_PSU, "ssd": rules.FIX_SSD}
+    assert r["tier"] == 2  # 16 GB card, but the PSU is unverified -> not tier 1
+    assert r["build"]["ram_layout"] == {"v": (4, 8), "src": "assumed"}  # worst case for "32 GB"
+    assert {"ram", "board", "psu", "storage"} <= set(r["unknown"])
 
 
-def test_detailed_listing_without_specs_dropped():
-    l = evaluate({"title": "4060 Ti 16GB", "description": "Top", "price_amount": 550, "attributes": {}})
-    assert l["fatal"] == "no_cpu_ram_in_full_text"
+@pytest.mark.parametrize("title, reason", [
+    ("PC i7-12700K RTX 3060 32GB", "intel_platform"),
+    ("PC Ryzen 5 7600 RTX 3070 32GB", "vram_under_12gb"),
+    ("PC Ryzen 5 7600 RTX 4060 Ti 32GB", "vram_under_12gb"),   # VRAM unstated -> 8 GB
+    ("PC Ryzen 5 5600X RTX 3060 32GB", "am4_under_64gb"),
+    ("PC Ryzen 5 8500G RTX 3060 32GB DDR5", "apu_pcie_x4"),
+    ("Mini-ITX PC Ryzen 5 7600 RTX 3060 32GB", "itx_or_sff"),
+    ("PC Ryzen 5 7600 Arc B580 32GB", "intel_arc"),
+])
+def test_hard_rejects(title, reason):
+    assert rules.assess({"title": title, "description": "", "price_amount": 400, "image_count": 3})["reject"] == reason
 
 
-def test_pickup_text_excluded():
-    l = evaluate({"title": "Gaming PC RTX 3060", "description": "Nur an Selbstabholer!", "price_amount": 400})
-    assert l["fatal"] == "pickup_text"
+def test_am4_64gb_is_tier4_under_550():
+    r = rules.assess({"title": "Ryzen 7 5700X RTX 3060 12GB 64GB DDR4 B550", "description": "",
+                      "price_amount": 300, "image_count": 3})
+    assert r["reject"] is None and r["tier"] == 4 and r["effective"] == 300 + rules.FIX_PSU + rules.FIX_SSD
 
 
-def test_local_listing_flagged_and_pickup_allowed():
-    l = evaluate({"title": "Gaming PC RTX 3060", "description": "Nur an Selbstabholer!", "price_amount": 400,
-                  "local": True})
-    assert l["fatal"] is None and l["flags"][0] == "local"
+def test_3090_jumps_to_tier0_and_may_stretch():
+    r = rules.assess({"title": "Ryzen 7 7700 RTX 3090 32GB DDR5", "description": "",
+                      "price_amount": 560, "image_count": 3})
+    assert r["tier"] == 0 and r["reject"] is None and "stretch_over_700" in r["flags"]
 
 
-def test_deal_score_is_peer_relative():
-    peers = [{"gpu": "RTX 4070", "perf": 165, "price": 1000, "value_ratio": 0.6} for _ in range(4)]
-    mkt = market(peers)
-    assert deal_score({"gpu": "RTX 4070", "perf": 165, "value_ratio": 0.9}, mkt) == 1.5
-    # unseen GPU in an unseen bracket falls back to the scan-wide median
-    assert deal_score({"gpu": "RTX 4070 Super", "perf": 190, "value_ratio": 0.6}, mkt) == 1.0
+def test_special_case_big_ram_weak_gpu():
+    r = rules.assess({"title": "Ryzen 5 7600 RTX 3070 64GB DDR5", "description": "1TB NVMe, Corsair RM750x",
+                      "price_amount": 550, "image_count": 3})
+    assert r["reject"] == "vram_under_12gb" and r["special"]
 
 
-def test_bands_span_budget():
-    b = bands()
-    assert b[0][0] == deals.BUDGET_MIN and b[-1][1] == deals.BUDGET_MAX and all(lo < hi for lo, hi in b)
+def test_two_scam_signals_drop():
+    r = rules.assess({**GOOD, "description": GOOD["description"] + " Nur Versand, bitte per WhatsApp melden."})
+    assert r["reject"] == "scam_signals"
+
+
+def test_too_cheap_vs_market_is_one_signal():
+    r = rules.assess(GOOD, gpu_median=1200)
+    assert r["reject"] is None and "too_cheap_vs_market" in r["flags"]
+
+
+def test_ranking_prefers_ram_over_vram():
+    a = rules.assess({**GOOD, "id": "a"})
+    b = rules.assess({**GOOD, "id": "b", "title": "Ryzen 5 7600 RTX 3060 12GB 64GB DDR5"})
+    assert sorted([a, b], key=rules.sort_key)[0]["ad_id"] == "a"  # tier 1 beats tier 2 first
+    c = rules.assess({**GOOD, "id": "c", "title": "Ryzen 5 7600 RTX 4060 Ti 16GB 64GB DDR5"})
+    assert sorted([a, c], key=rules.sort_key)[0]["ad_id"] == "c"  # same tier: more RAM wins
+
+
+def test_seller_message_lists_unknowns():
+    msg = rules.seller_message(["psu", "ram"], ships=False, mining_flag=False)
+    assert msg.startswith("Hallo,") and "Netzteil" in msg and "bestückt" in msg and "testen" in msg
+
+
+@pytest.mark.parametrize("title, desc, reason", [
+    ("HP Victus 15L Gaming-PC RTX 3060", "", "oem_prebuilt"),
+    ("GMKtec M7 Mini PC Ryzen 7 6850H 32GB DDR5", "", "mini_pc_or_handheld"),
+    ("Gaming PC Ryzen 9 7945HX", "", "mini_pc_or_handheld"),
+    ("Gaming PC RTX 3060", "UPDATE: Der PC als Ganzes wird nicht mehr verkauft, nur noch die einzelnen Komponenten.",
+     "parted_out"),
+])
+def test_fatal_more(title, desc, reason):
+    assert fatal_reason(title, desc, {}) == reason

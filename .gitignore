@@ -5,3 +5,4 @@ seen.json
 # python
 __pycache__/
 .pytest_cache/
+search_results.md
