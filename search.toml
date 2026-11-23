@@ -1,0 +1,43 @@
+# Kleinanzeigen search settings. Edit, save, then double-click launch.bat
+# (or run: python deals.py). Every run writes to runs/<date_time>/.
+
+[location]
+home_zip = "78628"
+local_radius_km = 30          # listings within this radius are marked "local" (easy pickup); not a filter
+
+[budget]                      # effective price = ask (VB: minus haggle) + fixes (Target.md §5)
+limit_eur = 700               # hard limit
+target_eur = 600              # tier 0-2 deals at or below this get "act_fast"
+stretch_eur = 75              # tier 0-1 (very good) deals may go this far over the limit
+am4_max_eur = 550             # cap for AM4 + 64 GB builds (tier 4)
+vb_discount = 0.10            # expected haggle on "VB" listings (0.05-0.15)
+special_max_eur = 800         # §6.3 special cases: effective + GPU fix must stay under this
+
+[search]
+category = "PCs"              # Elektronik > PCs
+ask_min_eur = 100             # asking price range searched
+ask_max_eur = 850             # above the limit on purpose: VB haggling and stretch deals
+sort = "DATE_DESCENDING"      # newest first
+pages_per_term = 10           # 30 ads per page
+max_requests = 250            # search requests per run, all terms together
+max_details = 300             # full listing fetches per run, best-ranked first
+delay_s = 0.3                 # pause between requests (be polite to the site)
+# Matched against title + description. A passing PC must name a 12 GB+ GPU, so GPUs come
+# first (8 GB twins included: the parser decides the VRAM), then AM5 words, then big RAM.
+terms = [
+    "3060", "4060 Ti", "5060 Ti", "4070", "5070", "3080", "3090", "4080", "5080", "4090",
+    "6700 XT", "6750 XT", "6800", "6900 XT", "6950 XT", "7600 XT", "7700 XT", "7800 XT", "7900",
+    "9060 XT", "9070",
+    "AM5", "DDR5", "B650", "X670", "B850", "X870", "A620",
+    "7600", "7600X", "9600X", "7700X", "9700X", "7800X3D", "9800X3D", "8700G",
+    "64GB", "64 GB", "2x32",
+]
+
+[bundles]                     # Priming §5.1 secondary track: AM5 CPU + board + RAM, GPU bought separately
+enabled = true
+category = "PC-Zubehör & Software"
+terms = ["Aufrüstkit", "Aufrüstset", "Aufrüst PC", "Bundle AM5", "AM5 Bundle", "B650 Bundle", "DDR5 Bundle"]
+
+[ai]
+prompt = "prompts/ai_pass.md"   # static instructions put at the top of every ai_prompt.md
+attach = ["Target.md", "Priming Brief.md"]   # appended after the instructions: the rules the AI judges by

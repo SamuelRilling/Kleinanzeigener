@@ -1,8 +1,6 @@
-# run outputs and local state
-ka_run_*/
-seen.json
+# run outputs and local state (runs/<date_time>/ and runs/seen.json)
+runs/
 
 # python
 __pycache__/
 .pytest_cache/
-search_results.md
