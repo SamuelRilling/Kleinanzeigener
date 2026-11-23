@@ -81,7 +81,7 @@ def test_ram(title, gb):
 
 
 def test_ram_layout_and_chipset():
-    assert parse_ram_layout("Corsair Vengeance 2×16GB DDR5") == (2, 16)
+    assert parse_ram_layout("PC", "Corsair Vengeance 2×16GB DDR5") == (2, 16)
     assert parse_chipset("MSI B650M Gaming") == "B650"
     assert parse_chipset("ASUS X670E Hero") == "X670E"
 
@@ -94,11 +94,11 @@ def test_ram_layout_and_chipset():
     ("Corsair CX650 Netzteil", 650, False),
 ])
 def test_psu(text, watts, trusted):
-    assert parse_psu(text) == {"watts": watts, "trusted": trusted}
+    assert parse_psu("PC", text) == {"watts": watts, "trusted": trusted, "missing": False}
 
 
 def test_psu_unmentioned():
-    assert parse_psu("Ryzen 5 7600, RTX 3060") is None
+    assert parse_psu("Ryzen 5 7600, RTX 3060", "") is None
 
 
 @pytest.mark.parametrize("text, nvme, gb", [
@@ -108,7 +108,7 @@ def test_psu_unmentioned():
     ("500GB SSD + 2TB HDD", False, 500),
 ])
 def test_storage(text, nvme, gb):
-    assert parse_storage(text) == {"nvme": nvme, "gb": gb}
+    assert parse_storage("PC", text) == {"nvme": nvme, "gb": gb, "missing": False}
 
 
 @pytest.mark.parametrize("title, desc, reason", [
@@ -127,7 +127,8 @@ def test_fatal(title, desc, reason):
 
 
 GOOD = {"id": "1", "title": "Gaming PC Ryzen 5 7600 RTX 4060 Ti 16GB 32GB DDR5",
-        "description": "MSI B650 Tomahawk, 2x16GB, be quiet Pure Power 12 M 750W, 1TB NVMe SSD, Arctic Freezer 36",
+        "description": "MSI B650 Tomahawk, 2x16GB, be quiet Pure Power 12 M 750W, 1TB NVMe SSD, Arctic Freezer 36\n"
+                       "Gehäuse: Fractal Pop Air",
         "price_amount": 650, "price_type": "PLEASE_CONTACT", "image_count": 6}
 
 
@@ -144,7 +145,7 @@ def test_unknown_parts_are_priced_not_rejected():
     assert r["fixes"] == {"psu": rules.FIX_PSU, "ssd": rules.FIX_SSD}
     assert r["tier"] == 2  # 16 GB card, but the PSU is unverified -> not tier 1
     assert r["build"]["ram_layout"] == {"v": (4, 8), "src": "assumed"}  # worst case for "32 GB"
-    assert {"ram", "board", "psu", "storage"} <= set(r["unknown"])
+    assert {"ram", "board", "psu", "storage", "case"} <= set(r["unknown"])
 
 
 @pytest.mark.parametrize("title, reason", [

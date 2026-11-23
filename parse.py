@@ -2,6 +2,8 @@
 returns plain values; `None` means "not stated". Pure functions, no I/O."""
 import re
 
+from text import by_priority, clauses, installed, labelled, negated
+
 GPU_LEADS = {"RTX": "(?:RTX|GTX|GEFORCE)", "GTX": "(?:RTX|GTX|GEFORCE)", "RX": "(?:RX|RADEON)", "ARC": "ARC"}
 VENDOR = {"RTX": "nvidia", "GTX": "nvidia", "RX": "amd", "ARC": "intel"}
 
@@ -58,10 +60,10 @@ INTEL_CHIPSETS = ("H310|B360|B365|H370|Z370|Z390|H410|B460|H470|Z490|H510|B560|H
 CHIPSET_RE = re.compile(rf"(?<![A-Z0-9])({AM5_CHIPSETS}|{AM4_CHIPSETS}|{INTEL_CHIPSETS})(?![0-9])")
 ITX_RE = re.compile(r"(?<![A-Z])(?:MINI[\s-]?ITX|M-ITX|ITX|SFF|SMALL\s+FORM)(?![A-Z])")
 
-RAM_RES = [re.compile(r"(?<!\d)(\d{1,3})\s*GB\s*(?:DDR\d\S*\s*)?(?:RAM|ARBEITSSPEICHER|DDR\d)"),
+RAM_RES = [re.compile(r"(?<![\dX×])(?<![X×]\s)(\d{1,3})\s*GB\s*(?:DDR\d\S*\s*)?(?:RAM|ARBEITSSPEICHER|DDR\d)"),
            re.compile(r"(?<!\w)(?:RAM|ARBEITSSPEICHER)\s*:?\s*(\d{1,3})\s*GB"),
            # bare "32GB" (titles like "Ryzen 5 RTX 3060 32GB"), unless it names storage or VRAM
-           re.compile(r"(?<![\d.,])(16|32|48|64|96|128)\s*GB(?!\s*(?:SSD|NVME|M\.2|M2|HDD|FESTPLATTE|SPEICHER|VRAM|V-RAM|GDDR))")]
+           re.compile(r"(?<![\d.,X×])(?<![X×]\s)(16|32|48|64|96|128)\s*GB(?!\s*(?:SSD|NVME|M\.2|M2|HDD|FESTPLATTE|SPEICHER|VRAM|V-RAM|GDDR))")]
 RAM_KIT_RE = re.compile(r"(?<!\d)([1-4])\s*[X×]\s*(\d{1,2})\s*GB")
 RAM_VALID = {8, 12, 16, 24, 32, 48, 64, 96, 128}
 VRAM_CONTEXT_RE = re.compile(r"(?:(?:RTX|GTX|RX|RADEON|ARC)[\s-]*[AB]?\d{3,4}(?:\s*(?:TI|SUPER|XTX|XT|GRE))*"
@@ -75,7 +77,7 @@ PSU_TRUSTED_RE = re.compile(r"STRAIGHT\s*POWER|PURE\s*POWER|DARK\s*POWER|BE\s*QU
                             r"MAG\s*A\d{3,4}GL|\bA\d{3,4}GL\b|MWE\s*(?:\d{3,4}\s*)?GOLD|HYDRO\s*G")
 PSU_MODEL_WATT_RE = re.compile(r"(?<![A-Z0-9])(?:RM[XE]?|HX|CX|CV|AX|SF|MWE\s*(?:GOLD\s*)?)(\d{3,4})[XEMI]?(?![A-Z0-9])"
                                r"|(?<![A-Z0-9])A(\d{3,4})GL")  # watts in the model name: RM850x, CX650, A750GL
-PSU_WINDOW = 60
+WATT_NOT_PSU_RE = re.compile(r"(?:RTX|GTX|RX|RADEON|RYZEN|INTEL|CPU|GPU|TDP|GRAFIKKARTE|PROZESSOR)[^,]{0,15}$")
 
 TOWER_RE = re.compile(r"PEERLESS|ASSASSIN|PHANTOM\s*SPIRIT|\bAK\d{3}\b|DARK\s*ROCK|PURE\s*ROCK|SHADOW\s*ROCK|NOCTUA|"
                       r"NH-[DU]\d|FREEZER|HYPER\s*212|\bAIO\b|WASSERK(?:Ü|UE)HL|LIQUID|KRAKEN|RADIATOR|"
@@ -106,146 +108,186 @@ FATAL_TITLE = [
     ("reserved", r"\breserviert\b"),
     ("oem_prebuilt", OEM_RE.pattern),
 ]
-DEFEKT_RE = re.compile(r"defekt\w*")
-DEFEKT_NEGATION = re.compile(r"(?:nicht|kein\w*|ohne|nie)\s+(?:\w+\s+)?$")  # same clause only
+DEFEKT_RE = re.compile(r"DEFEKT\w*")
 
 
-def _earliest(patterns, text):
-    """The pattern match that starts earliest in `text`; ties go to the longest."""
-    best = None
-    for item in patterns:
-        m = item[1].search(text)
-        if m and (best is None or (m.start(), -len(m.group())) < (best[1].start(), -len(best[1].group()))):
-            best = (item, m)
-    return best
 
 
-def parse_gpu(title, desc):
-    """{name, vendor, vram, vram_stated, in_desc} or None. Title wins over description."""
-    for text, in_desc in ((title.upper(), False), (desc.upper(), True)):
-        hit = _earliest(GPUS, text)
-        if not hit:
-            continue
-        (name, _, options, vendor), m = hit
-        said = VRAM_AFTER_RE.match(text[m.end():m.end() + 25])
-        stated = int(said.group(1)) if said and int(said.group(1)) in options else None
-        vram = stated or (options[0] if len(options) == 1 else OPTIMISTIC_VRAM.get(name, min(options)))
-        return {"name": name, "vendor": vendor, "vram": vram,
-                "vram_stated": stated is not None or len(options) == 1, "in_desc": in_desc}
-    return None
+def _matches(clause: str, patterns: list) -> list[tuple]:
+    """Non-overlapping (start, end, item) hits of `patterns` in one clause that name an
+    installed part; at the same start the longest wins ("RTX 4070 Ti" over "RTX 4070")."""
+    found = sorted(((m.start(), -m.end(), item) for item in patterns for m in item[1].finditer(clause)),
+                   key=lambda h: (h[0], h[1]))
+    out, last_end = [], -1
+    for start, neg_end, item in found:
+        end = -neg_end
+        if start >= last_end and installed(clause, start, end) and not negated(clause, start):
+            out.append((start, end, item))
+            last_end = end
+    return out
 
 
-def _ryzen(text):
-    """(model, suffix, tier) of the first Ryzen model number in `text`, or None."""
-    hits = []
-    if m := RYZEN_RE.search(text):
-        hits.append((m.start(), m.group(3), m.group(4) or "", m.group(1) or m.group(2)))
-    if m := RYZEN_BARE_RE.search(text):
-        hits.append((m.start(), m.group(1), m.group(2), None))
+def parse_gpu(title: str, desc: str) -> dict | None:
+    """{name, vendor, vram, vram_stated, in_desc, conflict} or None. A labelled
+    "Grafikkarte:" line beats the title, the title beats the rest."""
+    cls = clauses(title, desc)
+    hits = [(c, h) for c in by_priority(cls, "gpu") for h in _matches(c, GPUS)]
     if not hits:
         return None
-    _, model, suffix, tier = min(hits)
-    return model, suffix, int(tier) if tier else None
+    clause, (_, _, (name, _, options, vendor)) = hits[0]
+    stated = None
+    for c, (_, e, item) in hits:
+        said = VRAM_AFTER_RE.match(c[e:e + 25])
+        if item[0] == name and said and int(said.group(1)) in options:
+            stated = int(said.group(1))
+            break
+    vram = stated or (options[0] if len(options) == 1 else OPTIMISTIC_VRAM.get(name, min(options)))
+    return {"name": name, "vendor": vendor, "vram": vram, "vram_stated": stated is not None or len(options) == 1,
+            "in_desc": clause != cls[0], "conflict": len({h[2][0] for _, h in hits}) > 1}
 
 
-def parse_cpu(title, desc):
-    """{label, platform (AM5/AM4/INTEL/None), model, suffix, tier} or None."""
-    for text in (title.upper(), desc.upper()):
-        r, intel = _ryzen(text), INTEL_RE.search(text)
-        if r and not (intel and intel.start() < text.find(r[0])):
-            model, suffix, tier = r
-            series = int(model[0])
+def _cpu_hits(clause: str) -> list[dict]:
+    hits = []
+    for rx, bare in ((RYZEN_RE, False), (RYZEN_BARE_RE, True)):
+        for m in rx.finditer(clause):
+            if not installed(clause, m.start(), m.end()):
+                continue
+            model, suffix = (m.group(1), m.group(2)) if bare else (m.group(3), m.group(4) or "")
+            tier = None if bare else int(m.group(1) or m.group(2) or 0) or None
             tier = tier or (3 if model[1] <= "3" else 5 if model[1] <= "6" else 7 if model[1] <= "8" else 9)
-            platform = "AM5" if series in (7, 8, 9) else "AM4"
-            return {"label": f"Ryzen {tier} {model}{suffix}", "platform": platform,
-                    "model": model, "suffix": suffix, "tier": tier}
-        if intel or INTEL_TIER_RE.search(text):
-            return {"label": "Intel", "platform": "INTEL", "model": None, "suffix": "", "tier": None}
-        if m := RYZEN_TIER_RE.search(text):
-            return {"label": f"Ryzen {m.group(1)} (gen?)", "platform": None, "model": None,
-                    "suffix": "", "tier": int(m.group(1))}
+            hits.append((m.start(), {"label": f"Ryzen {tier} {model}{suffix}", "model": model, "suffix": suffix,
+                                     "tier": tier, "platform": "AM5" if model[0] in "789" else "AM4"}))
+    for m in INTEL_RE.finditer(clause):
+        if installed(clause, m.start(), m.end()):
+            hits.append((m.start(), {"label": "Intel", "model": None, "suffix": "", "tier": None, "platform": "INTEL"}))
+    return [h for _, h in sorted(hits, key=lambda h: h[0])]
+
+
+def parse_cpu(title: str, desc: str) -> dict | None:
+    """{label, platform (AM5/AM4/INTEL/None), model, suffix, tier, conflict} or None."""
+    cls = clauses(title, desc)
+    hits = [h for c in by_priority(cls, "cpu") for h in _cpu_hits(c)]
+    if hits:
+        return {**hits[0], "conflict": len({h["label"] for h in hits}) > 1}
+    text = "\n".join(cls)
+    if INTEL_TIER_RE.search(text):
+        return {"label": "Intel", "platform": "INTEL", "model": None, "suffix": "", "tier": None, "conflict": False}
+    if m := RYZEN_TIER_RE.search(text):
+        return {"label": f"Ryzen {m.group(1)} (gen?)", "platform": None, "model": None, "suffix": "",
+                "tier": int(m.group(1)), "conflict": False}
     return None
 
 
-def parse_chipset(text):
+def parse_chipset(text: str) -> str | None:
     m = CHIPSET_RE.search(text.upper())
     return m.group(1) if m else None
 
 
-def chipset_platform(chipset):
+def chipset_platform(chipset: str | None) -> str | None:
     if not chipset:
         return None
     for platform, names in (("AM5", AM5_CHIPSETS), ("AM4", AM4_CHIPSETS), ("INTEL", INTEL_CHIPSETS)):
         if re.fullmatch(names, chipset):
             return platform
-
-
-def parse_ram(title, desc):
-    """Total GB, title first."""
-    for text in (title.upper(), desc.upper()):
-        for rx in RAM_RES[:2]:
-            if gb := _ram_hit(rx, text):
-                return gb
-        for m in RAM_KIT_RE.finditer(text):
-            if int(m.group(1)) * int(m.group(2)) in RAM_VALID:
-                return int(m.group(1)) * int(m.group(2))
-        if gb := _ram_hit(RAM_RES[2], text):
-            return gb
     return None
 
 
-def _ram_hit(rx, text):
-    """First RAM size in `text` that isn't a VRAM figure ("RTX 3060 (12 GB RAM)")."""
-    for m in rx.finditer(text):
-        gb = int(m.group(1))
-        is_vram = gb <= 24 and VRAM_CONTEXT_RE.search(text[max(0, m.start() - 30):m.start()])
-        if gb in RAM_VALID and not is_vram:
-            return gb
-    return None
+def _ram_in(clause: str, rx: re.Pattern, kit: bool = False) -> list[int]:
+    out = []
+    for m in rx.finditer(clause):
+        gb = int(m.group(1)) * int(m.group(2)) if kit else int(m.group(1))
+        is_vram = not kit and gb <= 24 and VRAM_CONTEXT_RE.search(clause[max(0, m.start() - 30):m.start()])
+        if gb in RAM_VALID and not is_vram and installed(clause, m.start(), m.end()):
+            out.append(gb)
+    return out
 
 
-def parse_ram_layout(text):
+def ram_candidates(title: str, desc: str) -> list[int]:
+    """Installed-RAM sizes in priority order. Limits ("erweiterbar auf 64GB") and
+    VRAM figures are dropped; a bare "32GB" is only read outside GPU/SSD lines."""
+    cls = clauses(title, desc)
+    not_ram = set(labelled(cls, "gpu")) | set(labelled(cls, "storage"))
+    out = []
+    for c in by_priority(cls, "ram"):
+        out += _ram_in(c, RAM_RES[0]) + _ram_in(c, RAM_RES[1]) + _ram_in(c, RAM_KIT_RE, kit=True)
+        if c not in not_ram:
+            out += _ram_in(c, RAM_RES[2])
+    return out
+
+
+def parse_ram(title: str, desc: str) -> int | None:
+    """Total installed GB, or None."""
+    found = ram_candidates(title, desc)
+    return found[0] if found else None
+
+
+def parse_ram_layout(title: str, desc: str) -> tuple[int, int] | None:
     """(sticks, GB per stick) if written as "2x16GB", else None."""
-    m = RAM_KIT_RE.search(text.upper())
-    return (int(m.group(1)), int(m.group(2))) if m else None
+    for c in by_priority(clauses(title, desc), "ram"):
+        for m in RAM_KIT_RE.finditer(c):
+            if installed(c, m.start(), m.end()):
+                return int(m.group(1)), int(m.group(2))
+    return None
 
 
-def parse_ddr(text):
+def parse_ddr(text: str) -> int | None:
     m = DDR_RE.search(text.upper())
     return int(m.group(1)) if m else None
 
 
-def parse_psu(text):
-    """{watts, trusted} from text near a PSU keyword; None if nothing said."""
-    up = text.upper()
-    watts, trusted, found = None, False, False
-    for k in PSU_KEY_RE.finditer(up):
-        found = True
-        window = up[max(0, k.start() - PSU_WINDOW):k.end() + PSU_WINDOW]
-        trusted = trusted or bool(PSU_TRUSTED_RE.search(window))
-        for w in [*WATT_RE.finditer(window), *PSU_MODEL_WATT_RE.finditer(window)]:
-            if 300 <= int(w.group(1) or w.group(2)) <= 1600:
-                watts = max(watts or 0, int(w.group(1) or w.group(2)))
-    return {"watts": watts, "trusted": trusted} if found else None
+def parse_psu(title: str, desc: str) -> dict | None:
+    """{watts, trusted, missing}; None if no PSU is mentioned. Watts come only from
+    PSU clauses and never right after a GPU/CPU name (a "170W" TDP)."""
+    cls = clauses(title, desc)
+    psu_cls = by_priority([c for c in cls if PSU_KEY_RE.search(c) or labelled([c], "psu")], "psu")
+    if not psu_cls:
+        return None
+    watts, trusted, missing = None, False, False
+    for c in psu_cls:
+        key = PSU_KEY_RE.search(c)
+        missing = missing or bool(key and negated(c, key.start()))
+        trusted = trusted or bool(PSU_TRUSTED_RE.search(c))
+        for w in [*WATT_RE.finditer(c), *PSU_MODEL_WATT_RE.finditer(c)]:
+            value = int(w.group(1) or w.group(2))
+            tdp = WATT_NOT_PSU_RE.search(c[max(0, w.start() - 25):w.start()])
+            if watts is None and 300 <= value <= 1600 and not tdp:
+                watts = value
+    return {"watts": watts, "trusted": trusted and not missing, "missing": missing}
 
 
-def parse_cooler(text):
+def parse_cooler(title: str, desc: str) -> str | None:
     """'tower' (tower air or AIO), 'stock', or None."""
-    up = text.upper()
-    return "tower" if TOWER_RE.search(up) else "stock" if STOCK_COOLER_RE.search(up) else None
+    text = "\n".join(by_priority(clauses(title, desc), "cooler"))
+    return "tower" if TOWER_RE.search(text) else "stock" if STOCK_COOLER_RE.search(text) else None
 
 
-def parse_storage(text):
-    """{nvme, gb}; gb is the largest SSD capacity stated."""
-    up = text.upper()
-    gbs = []
-    for m in SSD_CAP_RE.finditer(up):
-        num, unit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
-        gbs.append(float(num.replace(",", ".")) * (1000 if unit == "TB" else 1))
-    return {"nvme": bool(NVME_RE.search(up)), "gb": int(max(gbs)) if gbs else None}
+STORAGE_WORD_RE = re.compile(r"SSD|NVME|M\.2|(?<!\w)M2(?!\w)|FESTPLATTE")
 
 
-def fatal_reason(title, desc, attributes):
+def parse_storage(title: str, desc: str) -> dict:
+    """{nvme, gb, missing}; gb is the largest SSD capacity stated in a storage clause."""
+    cls = [c for c in by_priority(clauses(title, desc), "storage") if STORAGE_WORD_RE.search(c)]
+    gbs, nvme, missing = [], False, False
+    for c in cls:
+        if negated(c, STORAGE_WORD_RE.search(c).start()):
+            missing = True
+            continue
+        nvme = nvme or bool(NVME_RE.search(c))
+        for m in SSD_CAP_RE.finditer(c):
+            num, unit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+            gbs.append(float(num.replace(",", ".")) * (1000 if unit == "TB" else 1))
+    return {"nvme": nvme, "gb": int(max(gbs)) if gbs else None, "missing": missing and not gbs}
+
+
+def parse_case(title: str, desc: str) -> dict:
+    """{name, sff}: the "Gehäuse:" line (shown, never priced) and a small-form-factor flag."""
+    cls = clauses(title, desc)
+    line = next(iter(labelled(cls, "case")), None)
+    name = line.split(":", 1)[1].strip()[:40] if line and ":" in line else None
+    return {"name": name, "sff": any(ITX_RE.search(c) for c in cls)}
+
+
+def fatal_reason(title: str, desc: str, attributes: dict) -> str | None:
     t, text = title.lower(), f"{title}\n{desc}".lower()
     if attributes.get("Zustand") == "Defekt":
         return "defekt"
@@ -255,7 +297,7 @@ def fatal_reason(title, desc, attributes):
     for reason, rx in FATAL_ANY:
         if re.search(rx, text):
             return reason
-    for m in DEFEKT_RE.finditer(text):
-        if not DEFEKT_NEGATION.search(text[max(0, m.start() - 30):m.start()]):
+    for c in clauses(title, desc):
+        if any(not negated(c, m.start()) for m in DEFEKT_RE.finditer(c)):
             return "defekt"
     return None
