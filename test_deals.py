@@ -152,7 +152,7 @@ def test_unknown_parts_are_priced_not_rejected():
     ("PC i7-12700K RTX 3060 32GB", "intel_platform"),
     ("PC Ryzen 5 7600 RTX 3070 32GB", "vram_under_12gb"),
     ("PC Ryzen 5 7600 RTX 4060 Ti 32GB", "vram_under_12gb"),   # VRAM unstated -> 8 GB
-    ("PC Ryzen 5 5600X RTX 3060 32GB", "am4_under_64gb"),
+    ("PC Ryzen 5 5600X RTX 3060 16GB", "am4_under_32gb"),
     ("PC Ryzen 5 8500G RTX 3060 32GB DDR5", "apu_pcie_x4"),
     ("Mini-ITX PC Ryzen 5 7600 RTX 3060 32GB", "itx_or_sff"),
     ("PC Ryzen 5 7600 Arc B580 32GB", "intel_arc"),

@@ -231,7 +231,8 @@ def render(result: dict) -> str:
     return "\n".join([
         f"# Kleinanzeigen search results — {stats['run_time'][:16]}\n", banner,
         f"{len(featured)} featured PCs, {len(others)} more passing, {len(bundles)} bundles (effective ≤ {budget.limit} €, "
-        f"tier 0–1 up to {budget.limit + budget.stretch} €). Code applied the Brief's rejects, fixes and tiers.\n",
+        f"tier 0–1 up to {budget.limit + budget.stretch} €; AM4 from {budget.am4_min_ram} GB RAM, Brief: 64). "
+        "Code applied the Brief's rejects, fixes and tiers.\n",
         section_pick(featured), section_shortlist(featured, others), section_bundles(bundles),
         section_questions(featured), section_special(result["final"], budget),
         section_market(result["snippet"], result["medians"], stats), section_log(stats, cfg), section_misses(every),

@@ -18,6 +18,7 @@ class Budget:
     am4_max: int = 550          # tier 4 cap (Brief §6)
     vb_discount: float = 0.10   # realistic haggle on "VB" listings (Priming §6.1: 5-15 %)
     special_max: int = 800      # §6.3 special case: effective + GPU fix must stay under this
+    am4_min_ram: int = 32       # AM4 RAM floor; the Brief's is 64 (below 64 passes as tier 5)
 
 
 DEFAULT_BUDGET = Budget()
@@ -46,7 +47,8 @@ PRICE_SCOPE_RE = re.compile(
     r"arbeitsspeicher|mainboard|netzteil|geh(?:ä|ae)use|einzel)|preis\s+pro\s+(?:st(?:ü|ue)ck|teil|komponente)|"
     r"st(?:ü|ue)ckpreis|einzelpreis|preise?\s+(?:siehe|laut)\s+(?:beschreibung|liste)|\bab\s+\d+\s*(?:€|euro)|anzahlung")
 BUNDLE_RE = re.compile(r"aufr(?:ü|ue)st[\s-]*(?:kit|set|pc|paket)|\bbundle\b|\bkit\b")
-TIER_NAMES = {0: "0 (24 GB NVIDIA)", 1: "1", 2: "2", 3: "3 (no day-one agent)", 4: "4 (AM4 64 GB+)"}
+TIER_NAMES = {0: "0 (24 GB NVIDIA)", 1: "1", 2: "2", 3: "3 (no day-one agent)", 4: "4 (AM4 64 GB+)",
+              5: "5 (AM4 under 64 GB)"}
 
 SHIP_ONLY_RE = re.compile(r"nur\s+(?:per\s+)?versand|keine?\s+abholung|abholung\s+(?:ist\s+)?nicht\s+möglich")
 ABROAD_RE = re.compile(r"im\s+ausland|derzeit\s+(?:im\s+ausland|unterwegs)|beruflich\s+unterwegs")
@@ -110,7 +112,7 @@ def extract(title: str, desc: str) -> dict:
     }
 
 
-def hard_reject(b: dict, ignore_vram: bool = False) -> str | None:
+def hard_reject(b: dict, budget: "Budget", ignore_vram: bool = False) -> str | None:
     """First Brief §2 hit, or None."""
     gpu, cpu, platform = b["gpu"], b["cpu"], b["platform"]["v"]
     if platform == "INTEL":
@@ -125,8 +127,8 @@ def hard_reject(b: dict, ignore_vram: bool = False) -> str | None:
         return "vram_under_12gb"
     if cpu.get("model") in APU_X4 and cpu.get("suffix") in ("G", "F"):
         return "apu_pcie_x4"
-    if platform == "AM4" and b["ram_gb"]["v"] < 64:
-        return "am4_under_64gb"
+    if platform == "AM4" and b["ram_gb"]["v"] < budget.am4_min_ram:
+        return f"am4_under_{budget.am4_min_ram}gb"
     if b["itx"]:
         return "itx_or_sff"
     return None
@@ -209,7 +211,7 @@ def tier(b: dict) -> int | None:
     if gpu["vendor"] == "nvidia" and gpu["vram"] >= 24:
         return 0
     if platform == "AM4":
-        return 4
+        return 4 if gb >= 64 else 5   # 5: AM4 below the Brief's 64 GB, allowed by settings
     if platform != "AM5":
         return None
     if gb < 32:
@@ -358,9 +360,9 @@ def assess(ad: dict, budget: Budget = DEFAULT_BUDGET, gpu_median: float | None =
     rec.update(needs_answers=bool(CRITICAL_UNKNOWNS & set(rec["unknown"])), featured=False,
                link=hardware.pcie_link(b) if b["gpu"] else None, headroom=hardware.headroom(b),
                gpu_note=hardware.card(b["gpu"]).note, parts_floor=hardware.parts_floor(b))
-    rec["reject"] = (fatal or price_reject(ask, desc, rec["parts_floor"]) or hard_reject(b)
+    rec["reject"] = (fatal or price_reject(ask, desc, rec["parts_floor"]) or hard_reject(b, budget)
                      or ("scam_signals" if len(scam) >= 2 else None))
-    if rec["reject"] == "vram_under_12gb" and not hard_reject(b, ignore_vram=True) \
+    if rec["reject"] == "vram_under_12gb" and not hard_reject(b, budget, ignore_vram=True) \
             and b["ram_gb"]["v"] >= 48 and rec["effective"] + FIX_GPU <= budget.special_max:
         rec["special"] = True
     if rec["reject"]:

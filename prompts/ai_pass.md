@@ -43,7 +43,11 @@ premium. Prices drift up month to month: a deal that clearly passes should not w
 The case of a complete PC is never priced; it shows under Headroom.
 
 **Limit:** the results header states it. Tier 0-1 listings may exceed it by a small stretch the user allowed for very
-good deals (flag `stretch_over_…`). AM4 builds (tier 4) have a lower cap of their own.
+good deals (flag `stretch_over_…`). AM4 with 64 GB+ (tier 4) has a lower cap of its own.
+
+**One Brief rule is loosened on purpose:** the Brief rejects AM4 below 64 GB; the user allows AM4 down to the RAM floor
+in the results header. Those builds are tier 5, ranked after everything else: a dead-end socket whose RAM upgrade is
+bought at today's prices. Pick one only when nothing on AM5 comes close, and say what it gives up.
 
 **Assumptions** (shown as `(?)`): an unknown part is priced at its cheapest acceptable fix, not rejected. The
 exception: a listing must name a CPU and a GPU (bundles: a CPU), or it is rejected. Defaults when not stated:
@@ -79,7 +83,7 @@ featured only if effective + 490 € for RAM still beats the best tier 0-2 PC.
   - Memory between runs: `new_since_last_run`, `price_drop_from_…`.
 
 ### Where the program is reliable, and where it is not
-- **Reliable:** the arithmetic, the rule order, rejects on clearly stated parts (Intel, < 12 GB VRAM, AM4 under 64 GB,
+- **Reliable:** the arithmetic, the rule order, rejects on clearly stated parts (Intel, < 12 GB VRAM, AM4 under the floor,
   laptops, mini-PCs, OEM prebuilts), and duplicate listings.
 - **Check:**
   - Which GPU, CPU and RAM are really installed when the text is loose (upgrade stories, "passend für", option lists).

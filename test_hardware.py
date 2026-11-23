@@ -89,3 +89,20 @@ def test_questions_merge_into_screenshot_and_label_photo():
     msg = rules.seller_message(["gpu_vram", "ram", "board", "psu"], ships=False, mining_flag=False)
     assert msg.count("CPU-Z") == 1 and "Typenschild" in msg and "bestückt" not in msg
     assert "bestückt" in rules.seller_message(["ram"], ships=False, mining_flag=False)
+
+
+def test_am4_32gb_passes_as_tier5_by_default():
+    r = assess("Ryzen 7 5700X RTX 3060 12GB 32GB DDR4 B550", "2x16GB", price_amount=400)
+    assert r["reject"] is None and r["tier"] == 5 and r["ai"].startswith("Coder")
+
+
+def test_am4_floor_follows_settings():
+    strict = rules.Budget(am4_min_ram=64)   # the Brief's own rule
+    r = rules.assess({**BASE, "id": "x", "title": "Ryzen 7 5700X RTX 3060 12GB 32GB DDR4 B550"}, strict)
+    assert r["reject"] == "am4_under_64gb"
+
+
+def test_tier5_ranks_after_am5():
+    am5 = assess("Ryzen 5 7600 RTX 3060 12GB 32GB DDR5 B650", "2x16GB", price_amount=650)
+    am4 = assess("Ryzen 7 5700X RTX 3060 12GB 32GB DDR4 B550", "2x16GB", price_amount=300)
+    assert [r["ad_id"] for r in rules.finalize([am4, am5])] == [am5["ad_id"], am4["ad_id"]]
