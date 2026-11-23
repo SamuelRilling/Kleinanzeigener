@@ -40,4 +40,4 @@ terms = ["Aufrüstkit", "Aufrüstset", "Aufrüst PC", "Bundle AM5", "AM5 Bundle"
 
 [ai]
 prompt = "prompts/ai_pass.md"   # static instructions put at the top of every ai_prompt.md
-attach = ["Target.md", "Priming Brief.md"]   # appended after the instructions: the rules the AI judges by
+attach = ["Target.md"]          # appended after the instructions: the rules the AI judges by
