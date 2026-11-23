@@ -1,6 +1,8 @@
-"""Launcher window. Settings tab: search.toml as editable fields; "Save and start"
-validates and saves, then switches to the Run tab, which shows a live counter, the
-log and the summary. Stdlib only (tkinter)."""
+"""Launcher window (stdlib tkinter), four tabs:
+  1. Settings        search.toml as editable fields; "Save and start search"
+  2. Selection rules what gets discarded, per-rule counts, re-evaluate a saved run offline
+  3. Run             live counter and log of a search
+  4. Results         a run as a table, card + full text with links, copy the AI prompt"""
 import logging
 import os
 import queue
@@ -10,10 +12,13 @@ from tkinter import ttk
 
 import config
 import deals
+from ui_form import changed, get_key, make_field, parse_list
+from ui_results import ResultsTab
+from ui_rules import RulesTab
 
 POLL_MS = 100
 NOISY_LOGGERS = ("httpx", "mcp", "main", "kleinanzeigen", "FastMCP")
-# (section.key, label, type). Category, sort and AI files stay in search.toml ("Open file").
+# (key, label, type). Category, sort and AI files stay in search.toml ("Open file").
 FIELDS = [
     ("Location", [("location.home_zip", "Home postcode", str),
                   ("location.local_radius_km", "Local radius (km, marks pickup-friendly)", int)]),
@@ -22,29 +27,19 @@ FIELDS = [
                 ("budget.stretch_eur", "Stretch for tier 0-1 deals (€)", int),
                 ("budget.am4_max_eur", "Cap for AM4 + 64 GB (€)", int),
                 ("budget.vb_discount", "Expected VB haggle (0.05-0.15)", float),
-                ("budget.special_max_eur", "Special cases: max incl. GPU (€)", int),
-                ("rules.am4_min_ram_gb", "AM4 minimum RAM (GB; Brief: 64)", int)]),
+                ("budget.special_max_eur", "Special cases: max incl. GPU (€)", int)]),
     ("Search", [("search.ask_min_eur", "Asking price from (€)", int),
                 ("search.ask_max_eur", "Asking price to (€)", int),
                 ("search.pages_per_term", "Pages per term (30 ads each)", int),
                 ("search.max_requests", "Max search requests", int),
                 ("search.max_details", "Max full listings read", int),
                 ("search.delay_s", "Pause between requests (s)", float),
+                ("search.full_text_all", "Read full text of every listing", bool),
+                ("search.reuse_days", "Reuse saved full text up to (days)", int),
                 ("bundles.enabled", "Search AM5 bundles too", bool)]),
 ]
 LISTS = [("search.terms", "Search terms (GPUs, AM5, RAM)"), ("bundles.terms", "Bundle terms"),
          ("search.broad_terms", "Broad terms (searched last)")]
-AM4_RAM_CHOICES = ("16", "32", "48", "64")
-
-
-def _get(data: dict, key: str):
-    section, name = key.split(".")
-    return data[section][name]
-
-
-def _parse_list(text: str) -> list[str]:
-    """Comma- or line-separated words -> list, blanks dropped."""
-    return [t.strip() for t in text.replace("\n", ",").split(",") if t.strip()]
 
 
 class QueueHandler(logging.Handler):
@@ -60,17 +55,22 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Kleinanzeigen PC search")
-        self.geometry("980x760")
-        self.minsize(760, 560)
+        self.geometry("1040x800")
+        self.minsize(820, 600)
         self.q: queue.Queue = queue.Queue()
-        self.folder = None
         self.vars: dict[str, tk.Variable] = {}
         self.texts: dict[str, tk.Text] = {}
+        self.callback = None
         self.tabs = ttk.Notebook(self)
         self.tabs.pack(fill="both", expand=True, padx=8, pady=8)
         self._build_settings()
+        self.rules_tab = RulesTab(self.tabs, self)
+        self.tabs.add(self.rules_tab, text="2. Selection rules")
         self._build_run()
-        self.load_form()
+        self.results_tab = ResultsTab(self.tabs, self)
+        self.tabs.add(self.results_tab, text="4. Results")
+        self.reload_settings()
+        self.results_tab.refresh_runs()
         self.after(POLL_MS, self._poll)
 
     # ---- settings tab ----
@@ -84,18 +84,7 @@ class App(tk.Tk):
             box.grid(row=0, column=col, sticky="nsew", padx=4)
             grid.columnconfigure(col, weight=1)
             for row, (key, label, kind) in enumerate(fields):
-                ttk.Label(box, text=label).grid(row=row, column=0, sticky="w", pady=2)
-                if kind is bool:
-                    var = tk.BooleanVar()
-                    ttk.Checkbutton(box, variable=var).grid(row=row, column=1, sticky="w")
-                elif key == "rules.am4_min_ram_gb":
-                    var = tk.StringVar()
-                    ttk.Combobox(box, textvariable=var, values=AM4_RAM_CHOICES, width=8,
-                                 state="readonly").grid(row=row, column=1, sticky="w")
-                else:
-                    var = tk.StringVar()
-                    ttk.Entry(box, textvariable=var, width=10).grid(row=row, column=1, sticky="w", padx=(6, 0))
-                self.vars[key] = var
+                self.vars[key] = make_field(box, row, label, kind)
         for key, label in LISTS:
             ttk.Label(tab, text=f"{label} — separate with commas or new lines").pack(anchor="w", pady=(10, 2))
             text = tk.Text(tab, height=3, wrap="word", font=("Segoe UI", 9))
@@ -105,74 +94,62 @@ class App(tk.Tk):
         bar.pack(fill="x", pady=(12, 0))
         ttk.Button(bar, text="Save and start search", command=self.save_and_start).pack(side="left")
         ttk.Button(bar, text="Save only", command=self.save).pack(side="left", padx=6)
-        ttk.Button(bar, text="Undo changes", command=self.load_form).pack(side="left")
+        ttk.Button(bar, text="Undo changes", command=self.reload_settings).pack(side="left")
         ttk.Button(bar, text="Open file (advanced)", command=lambda: os.startfile(config.DEFAULT_FILE)).pack(side="right")
-        self.form_msg = ttk.Label(tab, text="", foreground="#555", wraplength=900, justify="left")
+        self.form_msg = ttk.Label(tab, text="", foreground="#555", wraplength=940, justify="left")
         self.form_msg.pack(anchor="w", pady=(8, 0))
 
-    def load_form(self) -> None:
+    def reload_settings(self) -> None:
         try:
             self.data = config.raw()
         except Exception as exc:  # unreadable TOML: say so, keep the window usable
             self.form_msg.configure(text=f"search.toml can't be read: {exc}", foreground="#b00020")
             return
         for key, var in self.vars.items():
-            var.set(_get(self.data, key))
+            var.set(get_key(self.data, key))
         for key, text in self.texts.items():
             text.delete("1.0", "end")
-            text.insert("1.0", ", ".join(_get(self.data, key)))
+            text.insert("1.0", ", ".join(get_key(self.data, key)))
+        self.rules_tab.load(self.data)
         self.form_msg.configure(text="Edit the fields, then save. Category, sort and AI files: Open file.",
                                 foreground="#555")
 
     def _changes(self) -> dict:
-        """Only the fields that differ from the file, typed; ValueError names the bad field."""
-        kinds = {key: kind for _, fields in FIELDS for key, _, kind in fields}
-        changes = {}
-        for key, var in self.vars.items():
-            kind = int if key == "rules.am4_min_ram_gb" else kinds[key]
-            try:
-                value = var.get() if kind is bool else kind(str(var.get()).strip().replace(",", "."))
-            except (ValueError, tk.TclError):
-                label = next(lbl for _, f in FIELDS for k, lbl, _ in f if k == key)
-                raise ValueError(f"{label}: not a valid {kind.__name__}")
-            if value != _get(self.data, key):
-                changes[key] = value
+        edits = changed([f for _, fields in FIELDS for f in fields], self.vars, self.data)
         for key, text in self.texts.items():
-            value = _parse_list(text.get("1.0", "end"))
-            if value != _get(self.data, key):
-                changes[key] = value
-        return changes
+            value = parse_list(text.get("1.0", "end"))
+            if value != get_key(self.data, key):
+                edits[key] = value
+        return edits
 
     def save(self) -> bool:
         try:
-            changes = self._changes()
-            if changes:
-                config.save(changes)
+            edits = self._changes()
+            if edits:
+                config.save(edits)
             config.load()   # also validates an unchanged file
         except ValueError as exc:
             self.form_msg.configure(text=str(exc), foreground="#b00020")
             return False
-        self.load_form()
-        self.form_msg.configure(text=f"Saved ({len(changes)} change{'s' if len(changes) != 1 else ''}).",
+        self.reload_settings()
+        self.form_msg.configure(text=f"Saved ({len(edits)} change{'s' if len(edits) != 1 else ''}).",
                                 foreground="#1b5e20")
         return True
 
     def save_and_start(self) -> None:
         if self.save():
-            self.tabs.select(1)
+            self.tabs.select(2)
             self.start()
 
     # ---- run tab ----
     def _build_run(self) -> None:
         tab = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(tab, text="2. Run")
+        self.tabs.add(tab, text="3. Run")
         bar = ttk.Frame(tab)
         bar.pack(fill="x")
         self.run_btn = ttk.Button(bar, text="Start search", command=self.start)
         self.run_btn.pack(side="left")
-        self.open_btn = ttk.Button(bar, text="Open results", command=self.open_results, state="disabled")
-        self.open_btn.pack(side="right")
-        self.counter = ttk.Label(tab, text="Listings found: 0 · full listings read: 0", font=("Segoe UI", 12, "bold"))
+        self.counter = ttk.Label(tab, text="Listings found: 0 · full listings: 0", font=("Segoe UI", 12, "bold"))
         self.counter.pack(anchor="w", pady=(10, 2))
         self.status = ttk.Label(tab, text="Start from the Settings tab, or press Start search.", foreground="#555")
         self.status.pack(anchor="w")
@@ -191,48 +168,55 @@ class App(tk.Tk):
 
     def start(self) -> None:
         self.run_btn.configure(state="disabled")
-        self.open_btn.configure(state="disabled")
-        self.counter.configure(text="Listings found: 0 · full listings read: 0")
+        self.counter.configure(text="Listings found: 0 · full listings: 0")
         self._show("Starting search…", replace=True)
         self.status.configure(text="Running. This takes a while; the site is queried politely.")
-        threading.Thread(target=self._work, daemon=True).start()
+        self.start_job(lambda: deals.run(on_progress=lambda counts: self.q.put(("progress", counts))),
+                       self._search_done)
 
-    def _work(self) -> None:
-        handler = QueueHandler(self.q)
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        log = logging.getLogger("deals")
-        log.addHandler(handler)
-        try:
-            self.q.put(("done", deals.run(on_progress=lambda counts: self.q.put(("progress", counts)))))
-        except Exception as exc:  # shown in the window instead of a silent dead thread
-            self.q.put(("error", f"{type(exc).__name__}: {exc}"))
-        finally:
-            log.removeHandler(handler)
+    def _search_done(self, summary: dict | None, error: str | None) -> None:
+        self.run_btn.configure(state="normal")
+        if error:
+            self.status.configure(text="Search failed. See the message above.")
+            return
+        self.status.configure(text=f"Done. Results in {summary['folder'].name}; see the Results tab.")
+        self.rules_tab.refresh_runs(select=summary["folder"].name)
+
+    def start_job(self, work, callback) -> None:
+        """Run `work()` off the UI thread with the log attached; `callback(summary, error)` after."""
+        self.callback = callback
+
+        def job() -> None:
+            handler = QueueHandler(self.q)
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            log = logging.getLogger("deals")
+            log.addHandler(handler)
+            try:
+                self.q.put(("done", work()))
+            except Exception as exc:  # shown in the window instead of a silent dead thread
+                self.q.put(("error", f"{type(exc).__name__}: {exc}"))
+            finally:
+                log.removeHandler(handler)
+
+        threading.Thread(target=job, daemon=True).start()
 
     def _poll(self) -> None:
         while not self.q.empty():
             kind, payload = self.q.get()
             if kind == "progress":
                 read = f"{payload['details_done']} / {payload['details_total']}" if payload["details_total"] else "0"
-                self.counter.configure(text=f"Listings found: {payload['found']} · full listings read: {read}")
+                self.counter.configure(text=f"Listings found: {payload['found']} · full listings: {read}")
             elif kind == "log":
                 self._show(payload)
             elif kind == "error":
                 self._show(payload, "error")
-                self.status.configure(text="Search failed. See the message above.")
-                self.run_btn.configure(state="normal")
+                self.callback(None, payload)
             else:
-                self.folder = payload["folder"]
                 self._show("\n" + payload["text"], "summary")
-                self.status.configure(text=f"Done. Results in {self.folder.name}.")
-                self.run_btn.configure(state="normal")
-                self.open_btn.configure(state="normal")
+                self.callback(payload, None)
+                self.results_tab.refresh_runs(select=payload["folder"].name)
+                self.tabs.select(3)
         self.after(POLL_MS, self._poll)
-
-    def open_results(self) -> None:
-        if self.folder:
-            os.startfile(self.folder / "results.md")
-            os.startfile(self.folder)
 
 
 def main() -> None:
