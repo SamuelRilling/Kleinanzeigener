@@ -18,7 +18,7 @@ Tests (offline, no searches): `python -m pytest -q`
 | File | Contents |
 |---|---|
 | `results.md` | Report in Priming Brief §9 order: A pick, B shortlist (+ relevant listing text), B2 bundles, C seller questions (top 5 only), D special cases, E market notes, F search log, G closest misses |
-| `ai_prompt.md` | `prompts/ai_pass.md` (static instructions) + attached briefs + `results.md` |
+| `ai_prompt.md` | `prompts/ai_pass.md` (priming) + `Target.md` (binding rules) + `results.md` |
 | `listings.jsonl` | Every assessed listing: parsed build with stated/assumed source per part, fixes, effective price, tier, verdict |
 | `raw.jsonl` | Raw search hit + full detail per listing |
 | `run.json` | Settings snapshot + run stats |
@@ -32,7 +32,9 @@ Tests (offline, no searches): `python -m pytest -q`
 | `search.toml` / `config.py` | Settings; validated at load, every bad field reported at once |
 | `text.py` | Shared primitives: clauses (spec lines), `Label:` lines, "not installed" context (limits, support notes, history), negation |
 | `parse.py` | Text → parts: GPU + VRAM twins, CPU/platform, chipset, RAM size/layout/DDR, PSU, cooler, SSD, case, text rejects |
-| `rules.py` | The Brief as code: hard rejects, fix ledger → effective price, RAM path, tiers, tie-breakers, special cases, bundle track, risk signals, seller questions |
+| `hardware.py` | Brief §1/§4 component knowledge: GPU cards (used value, PCIe lanes/gen, Brief note), PCIe link, upgrade headroom, parts-value floor |
+| `rules.py` | The Brief as code: hard rejects, price sanity, fix ledger → effective price, RAM path, tiers, tie-breakers, needs-answers ranking, featuring, special cases, bundle track, risk signals, seller questions |
+| `prompts/ai_pass.md` | The AI-pass priming: goal, user, market, how the program works and where it is weak, what to do, answer format |
 | `deals.py` | Search (local sweep + terms + bundles), dedupe, snippet triage, best-first detail fetch, run |
 | `report.py` | Run folder writer and launcher summary |
 | `ui.py` / `launch.bat` | Tkinter launcher (stdlib) |
@@ -47,6 +49,19 @@ Tests (offline, no searches): `python -m pytest -q`
 - **Conflicts.** Title and description disagreeing (e.g. 32 vs 16 GB, two GPUs) mark the part assumed and
   add a `conflict_*` flag and a seller question; the listing is not dropped.
 - **Assumptions decide price, not rejection** (Priming §6.2), and every assumed value shows `(?)`.
+
+## Ranking and featuring
+
+- **Needs answers ranks lower.** A listing whose GPU VRAM, CPU/platform or RAM size is unknown or contradicted
+  ranks below clear listings of its tier, and is featured (shortlist, cards, seller message) only when the deal
+  is good: tier 0-1 or effective at or under the target. Other unknowns are priced at their worst case instead.
+- **Tier 3 (16 GB)** is featured only if effective + 490 € RAM still beats the best tier 0-2 PC.
+- **Price sanity.** Placeholder prices, prices stated for one part ("Preis gilt nur für die Grafikkarte",
+  "pro Stück"), and asks below half of the stated GPU + RAM value are filtered and listed in section H.
+- **System view per listing:** PCIe link (weakest of CPU, slot, card), headroom for the next GPU and RAM, and the
+  Brief's note on the card.
+- **Seller questions** merge into one CPU-Z/GPU-Z screenshot request when 2+ core parts are unknown, and a PSU
+  label photo instead of "which PSU?".
 
 ## Pipeline safeguards
 
