@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 import rules
+from policy import Policy, deviations
 from text import CLAUSE_SPLIT_RE
 
 SHORTLIST = 10        # featured listings shown with a card and full text
@@ -156,9 +157,9 @@ def section_shortlist(featured: list[dict], others: list[dict]) -> str:
     return "\n".join(out) + "\n"
 
 
-def section_bundles(bundles: list[dict]) -> str:
-    head = (f"## B2. Bundle track (AM5 platform without GPU; + {rules.FIX_GPU} € used RTX 3060 12 GB, "
-            f"+ {rules.FIX_CASE} € case if none named)\n")
+def section_bundles(bundles: list[dict], policy) -> str:
+    head = (f"## B2. Bundle track (AM5 platform without GPU; + {policy.fix_gpu} € used RTX 3060 12 GB, "
+            f"+ {policy.fix_case} € case if none named)\n")
     if not bundles:
         return head + "\nNone passed.\n"
     return head + "\n" + "\n".join([HEADER, *[row(i, r) for i, r in enumerate(bundles[:BUNDLES_SHOWN], 1)], "",
@@ -174,12 +175,12 @@ def section_questions(featured: list[dict]) -> str:
     return "\n".join(out) if len(out) > 1 else out[0] + "\nNone needed: the featured listings state their key parts.\n"
 
 
-def section_special(final: list[dict], budget: rules.Budget) -> str:
-    out = [f"## D. Special cases (lots of RAM, GPU under 12 GB; + {rules.FIX_GPU} € GPU ≤ {budget.special_max} €)\n"]
+def section_special(final: list[dict], policy: Policy) -> str:
+    out = [f"## D. Special cases (lots of RAM, GPU under 12 GB; + {policy.fix_gpu} € GPU ≤ {policy.special_max} €)\n"]
     for r in (r for r in final if r["special"]):
         c = build_cells(r)
         out.append(f"- [{r['title'][:60]}]({r['url']}) — {ask_txt(r)}, {c['cpu']}, {c['ram']}, {c['gpu']}; effective "
-                   f"{r['effective']} + GPU {rules.FIX_GPU} = **{r['effective'] + rules.FIX_GPU} €** · {where(r)}")
+                   f"{r['effective']} + GPU {policy.fix_gpu} = **{r['effective'] + policy.fix_gpu} €** · {where(r)}")
     return "\n".join(out) + ("\n" if len(out) > 1 else "None found.\n")
 
 
@@ -189,15 +190,18 @@ def section_market(snippet: list[dict], medians: dict, stats: dict) -> str:
     rejects = ", ".join(f"{k} {v}" for k, v in sorted(stats["rejects"].items(), key=lambda x: -x[1])) or "none"
     return ("## E. Market notes (median asking prices of whole PCs in this scan)\n\n"
             "| Shape (platform · RAM · GPU) | Median ask | n |\n|---|---|---|\n" + "\n".join(shape_lines) +
-            f"\n\nBy GPU (all platforms): {gpu_lines}\n\nRead: {stats['unique']} unique listings, {stats['details']} "
-            f"full details ({stats['detail_skipped']} skipped by the cap, {stats['detail_errors']} failed). "
-            f"Rejects: {rejects}\n")
+            f"\n\nBy GPU (all platforms): {gpu_lines}\n\nRead: {stats['unique']} unique listings; full text: "
+            f"{stats['details']} fetched, {stats.get('reused', 0)} reused from saved data, {stats['detail_skipped']} "
+            f"skipped by the cap, {stats['detail_errors']} failed; {stats.get('preview_only', 0)} judged on the search "
+            f"preview only. Rejects (first rule that hit): {rejects}\n")
 
 
 def section_log(stats: dict, cfg) -> str:
     terms = ", ".join(f"{t} ({n})" for t, n in stats["terms"].items())
     errs = "\n".join(f"- {e}" for e in stats["errors"][:10]) or "none"
-    return (f"## F. Search log\n\nRun {stats['run_time']} · {stats['requests']} search requests"
+    review = (f"Re-evaluation of the saved run {stats['review_of']} with the current rules: no new search, so "
+              "sold or new listings since then are not reflected.\n\n" if stats.get("review_of") else "")
+    return (f"## F. Search log\n\n{review}Run {stats['run_time']} · {stats['requests']} search requests"
             f"{' (request cap hit)' if stats['capped'] else ''} · {cfg.category}, Angebote, {cfg.sort}, "
             f"{cfg.ask_min}–{cfg.ask_max} € ask.\n\nTerms (ads found): {terms}\n\nErrors:\n{errs}\n")
 
@@ -220,8 +224,15 @@ def section_filtered(records) -> str:
     return f"## H. Filtered as mispriced or scam ({len(hits)})\n\n" + ("\n".join(lines) or "None.") + "\n"
 
 
+def section_rules(policy: Policy) -> str:
+    """The user's deliberate changes to the Brief, so neither the reader nor the AI mistakes them for errors."""
+    changed = deviations(policy)
+    lines = "\n".join(f"- {d}" for d in changed) or "- none: the Brief's rules apply as written"
+    return f"**Selection rules changed from the Brief (user's choice):**\n{lines}\n"
+
+
 def render(result: dict) -> str:
-    cfg, stats, budget = result["cfg"], result["stats"], result["cfg"].budget
+    cfg, stats, policy = result["cfg"], result["stats"], result["cfg"].policy
     pcs = [r for r in result["passed"] if r["track"] == "pc"]
     featured, others = [r for r in pcs if r["featured"]], [r for r in pcs if not r["featured"]]
     bundles = [r for r in result["passed"] if r["track"] == "bundle"]
@@ -230,11 +241,11 @@ def render(result: dict) -> str:
     every = list({**{r["ad_id"]: r for r in result["snippet"]}, **{r["ad_id"]: r for r in result["final"]}}.values())
     return "\n".join([
         f"# Kleinanzeigen search results — {stats['run_time'][:16]}\n", banner,
-        f"{len(featured)} featured PCs, {len(others)} more passing, {len(bundles)} bundles (effective ≤ {budget.limit} €, "
-        f"tier 0–1 up to {budget.limit + budget.stretch} €; AM4 from {budget.am4_min_ram} GB RAM, Brief: 64). "
-        "Code applied the Brief's rejects, fixes and tiers.\n",
-        section_pick(featured), section_shortlist(featured, others), section_bundles(bundles),
-        section_questions(featured), section_special(result["final"], budget),
+        f"{len(featured)} featured PCs, {len(others)} more passing, {len(bundles)} bundles (effective ≤ {policy.limit} €"
+        f"). Code applied the Brief's rejects, fixes and tiers.\n",
+        section_rules(policy),
+        section_pick(featured), section_shortlist(featured, others), section_bundles(bundles, policy),
+        section_questions(featured), section_special(result["final"], policy),
         section_market(result["snippet"], result["medians"], stats), section_log(stats, cfg), section_misses(every),
         section_filtered(every),
     ])
@@ -256,14 +267,14 @@ def _jsonl(path: Path, rows) -> None:
         f.writelines(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows)
 
 
-def write_run(runs_dir: Path, result: dict) -> Path:
-    folder = runs_dir / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+def write_run(runs_dir: Path, result: dict, suffix: str = "") -> Path:
+    folder = runs_dir / (datetime.now().strftime("%Y-%m-%d_%H%M%S") + suffix)
     folder.mkdir(parents=True)
     md = render(result)
     (folder / "results.md").write_text(md, encoding="utf-8")
     (folder / "ai_prompt.md").write_text(ai_prompt(md, result["cfg"]), encoding="utf-8")
-    final_ids = {r["ad_id"] for r in result["final"]}
-    _jsonl(folder / "listings.jsonl", result["final"] + [r for r in result["snippet"] if r["ad_id"] not in final_ids])
+    passed_ids = {r["ad_id"] for r in result["passed"]}   # finalized: featured, ranks, cross-listing flags
+    _jsonl(folder / "listings.jsonl", result["passed"] + [r for r in result["final"] if r["ad_id"] not in passed_ids])
     _jsonl(folder / "raw.jsonl", (result["raw"].get(h["id"], h) for h in result["hits"]))
     settings = {k: (str(v) if isinstance(v, Path) else v) for k, v in dataclasses.asdict(result["cfg"]).items()}
     (folder / "run.json").write_text(json.dumps({"settings": settings, "stats": result["stats"]},
@@ -275,8 +286,10 @@ def summary(result: dict, folder: Path) -> dict:
     """Short text for the console / launcher window."""
     stats, passed = result["stats"], result["passed"]
     featured = [r for r in passed if r["track"] == "pc" and r["featured"]]
-    lines = [f"{'INCOMPLETE RUN — ' if stats['incomplete'] else ''}{stats['unique']} listings read, "
-             f"{stats['details']} in full, {len(featured)} featured PCs, {len(passed)} passing in total, "
+    lines = [f"{'INCOMPLETE RUN — ' if stats['incomplete'] else ''}"
+             f"{'Re-evaluated ' + stats['review_of'] + ': ' if stats.get('review_of') else ''}{stats['unique']} listings, "
+             f"full text {stats['details']} fetched + {stats.get('reused', 0)} reused, {len(featured)} featured PCs, "
+             f"{len(passed)} passing in total, "
              f"{sum(r['special'] for r in result['final'])} special cases."]
     lines += [f"  {i}. {r['effective']} € eff · tier {r['tier']} · {r['title'][:60]}" for i, r in enumerate(featured[:5], 1)]
     top = sorted(stats["rejects"].items(), key=lambda x: -x[1])[:5]

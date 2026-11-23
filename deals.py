@@ -20,13 +20,14 @@ from pathlib import Path
 import config
 import report
 import rules
+from policy import Policy
 
 MCP_DIR = r"C:\Users\Samuel\.config\opencode\mcp\kleinanzeigen-mcp"
 RUNS_DIR = config.ROOT / "runs"
 STATE_FILE = RUNS_DIR / "seen.json"
 MARKET_MIN_SAMPLES = 4
 INCOMPLETE_ERROR_SHARE = 0.2      # more failed detail fetches than this -> results marked INCOMPLETE
-OVER_BUDGET_DETAIL_SLACK = 100    # snippet over budget by up to this may still pass with the full text
+OVER_BUDGET_DETAIL_SLACK = 100    # snippet over policy by up to this may still pass with the full text
 
 log = logging.getLogger("deals")
 
@@ -135,16 +136,16 @@ def gpu_medians(records: list[dict]) -> dict:
     return {g: statistics.median(v) for g, v in groups.items() if len(v) >= MARKET_MIN_SAMPLES}
 
 
-def needs_detail(r: dict, budget: rules.Budget) -> bool:
+def needs_detail(r: dict, policy: Policy) -> bool:
     """Whether the full text could change this snippet verdict."""
     if not r["reject"] or r["special"]:
         return True
     if r["reject"] in FINAL_AT_SNIPPET:
         return False
-    if r["reject"] == "vram_under_12gb":   # an assumed 8 GB twin, or a §6.3 candidate
+    if r["reject"].startswith("vram_under_"):   # an assumed 8 GB twin, or a §6.3 candidate
         return not r["build"]["gpu"]["vram_stated"] or r["build"]["ram_gb"]["v"] >= 48
     if r["reject"] == "over_budget":
-        return r["effective"] <= budget.limit + budget.stretch + OVER_BUDGET_DETAIL_SLACK
+        return r["effective"] <= policy.limit + policy.stretch + OVER_BUDGET_DETAIL_SLACK
     return True
 
 
@@ -184,64 +185,132 @@ def count(stats: dict, reason: str) -> None:
     stats["rejects"][reason] = stats["rejects"].get(reason, 0) + 1
 
 
-async def fetch_details(client, cfg: config.Config, todo: list[dict], by_id: dict, medians: dict,
-                        stats: dict, progress: Progress) -> tuple[list[dict], dict]:
-    final, raw = [], {}
+# ---- datasets: every run folder's raw.jsonl is a reusable dataset ----
+RUN_NAME_FORMAT = "%Y-%m-%d_%H%M%S"
+
+
+def list_runs() -> list[Path]:
+    """Run folders that hold a dataset, newest first."""
+    if not RUNS_DIR.exists():
+        return []
+    return sorted((p for p in RUNS_DIR.iterdir() if (p / "raw.jsonl").exists()), key=lambda p: p.name, reverse=True)
+
+
+def _run_time(folder: Path) -> datetime:
+    return datetime.strptime(folder.name[:17], RUN_NAME_FORMAT)
+
+
+def load_dataset(folder: Path) -> list[dict]:
+    """raw.jsonl rows: each a search hit, merged with its full listing when one was read
+    ("attributes" present). Rows without `_fetched_at` date from the folder's run."""
+    fetched = _run_time(folder).isoformat(timespec="seconds")
+    with (folder / "raw.jsonl").open(encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    return [{**r, "_fetched_at": r.get("_fetched_at", fetched)} if "attributes" in r else r for r in rows]
+
+
+def load_cache(max_age_days: int) -> dict:
+    """Full listings from the newest dataset still young enough to reuse: {id: row}."""
+    runs = list_runs()
+    if not runs or max_age_days <= 0:
+        return {}
+    now = datetime.now()
+    return {r["id"]: r for r in load_dataset(runs[0])
+            if "attributes" in r and (now - datetime.fromisoformat(r["_fetched_at"])).days < max_age_days}
+
+
+def reusable(hit: dict, cached: dict | None) -> bool:
+    """Same listing at the same price: its saved full text still holds."""
+    return bool(cached) and cached.get("price_amount") == hit.get("price_amount")
+
+
+async def fetch_details(client, cfg: config.Config, todo: list[dict], by_id: dict, cache: dict,
+                        stats: dict, progress: Progress) -> tuple[dict, set]:
+    """{id: hit merged with its full listing}, reusing saved ones, and the ids found inactive."""
+    details, inactive = {}, set()
     batch = todo[:cfg.max_details]
-    for r in batch:
-        d = await call(client, "get_ad_detail", {"ad_id": int(r["ad_id"])}, stats)
-        stats["details"] += 1
-        progress.detail(stats["details"], len(batch))
-        await asyncio.sleep(cfg.delay_s)
-        if d is None:
-            stats["detail_errors"] += 1
-            continue
-        if d.get("ad_status"):  # no longer active
-            count(stats, "inactive")
-            continue
-        merged = {**by_id[r["ad_id"]], **d}
-        raw[r["ad_id"]] = merged
-        gpu = (r["build"]["gpu"] or {}).get("name")
-        final.append(rules.assess(merged, cfg.budget, medians.get(gpu)))
-    return final, raw
+    for i, r in enumerate(batch, 1):
+        hit, cached = by_id[r["ad_id"]], cache.get(r["ad_id"])
+        if reusable(hit, cached):
+            details[r["ad_id"]] = {**cached, "local": bool(hit.get("local"))}
+            stats["reused"] += 1
+        else:
+            d = await call(client, "get_ad_detail", {"ad_id": int(r["ad_id"])}, stats)
+            stats["details"] += 1
+            await asyncio.sleep(cfg.delay_s)
+            if d is None:
+                stats["detail_errors"] += 1
+            elif d.get("ad_status"):  # sold, reserved or deleted since the search
+                inactive.add(r["ad_id"])
+                count(stats, "inactive")
+            else:
+                details[r["ad_id"]] = {**hit, **d, "_fetched_at": datetime.now().isoformat(timespec="seconds")}
+        progress.detail(i, len(batch))
+    return details, inactive
 
 
-async def scan(cfg: config.Config, progress: Progress | None = None) -> dict:
-    """Search + assess. Returns everything the report needs (no files written)."""
+def evaluate(cfg: config.Config, hits: list[dict], details: dict, stats: dict) -> dict:
+    """Pure judging, no API calls: every listing is assessed on its full text when one was
+    read, else on the search preview (flagged `preview_only` if it passes)."""
+    stats = {**stats, "rejects": dict(stats.get("rejects", {}))}
+    snippet = [rules.assess(h, cfg.policy) for h in hits]
+    medians = gpu_medians(snippet)
+    final = []
+    for h, s in zip(hits, snippet):
+        row = details.get(h["id"])
+        gpu = (s["build"]["gpu"] or {}).get("name")
+        final.append(rules.assess(row, cfg.policy, medians.get(gpu)) if row else s)
+    for r in final:
+        if r["reject"]:
+            count(stats, r["reject"])
+    stats["preview_only"] = sum(1 for r in final if not r["full_text"])
+    attempted = stats.get("details", 0)
+    stats["incomplete"] = attempted > 0 and stats.get("detail_errors", 0) / attempted > INCOMPLETE_ERROR_SHARE
+    passed = rules.finalize([r for r in final if not r["reject"]], cfg.policy)
+    seen = load_seen()
+    mark_seen(passed, seen)
+    return {"cfg": cfg, "stats": stats, "hits": hits, "raw": details, "snippet": snippet, "final": final,
+            "passed": passed, "medians": medians, "seen": seen}
+
+
+async def scan(cfg: config.Config, progress: Progress | None = None, cache: dict | None = None) -> dict:
+    """Search, read full listings (reusing saved ones), then evaluate."""
     progress = progress or Progress()
+    cache = load_cache(cfg.reuse_days) if cache is None else cache
     sys.path.insert(0, MCP_DIR)
     import main as ka_main  # kleinanzeigen-mcp server module, run in-process
     from mcp import Client
 
-    stats = {"run_time": datetime.now().isoformat(timespec="seconds"), "requests": 0, "details": 0,
+    stats = {"run_time": datetime.now().isoformat(timespec="seconds"), "requests": 0, "details": 0, "reused": 0,
              "detail_errors": 0, "detail_skipped": 0, "terms": {}, "errors": [], "capped": False, "rejects": {}}
     async with Client(ka_main.mcp) as client:
         hits = dedupe_reposts(await discover(client, cfg, stats, progress))
-        stats["unique"] = len(hits)
         by_id = {h["id"]: h for h in hits}
-        snippet = [rules.assess(h, cfg.budget) for h in hits]
-        medians = gpu_medians(snippet)
-        todo = sorted((r for r in snippet if needs_detail(r, cfg.budget)), key=detail_priority)
-        for r in snippet:
-            if not needs_detail(r, cfg.budget):
-                count(stats, r["reject"])
+        snippet = [rules.assess(h, cfg.policy) for h in hits]
+        todo = sorted((r for r in snippet if cfg.full_text_all or needs_detail(r, cfg.policy)), key=detail_priority)
         stats["detail_skipped"] = max(0, len(todo) - cfg.max_details)
-        log.info("[detail] %d of %d listings need the full text (cap %d)", len(todo), len(hits), cfg.max_details)
-        final, raw = await fetch_details(client, cfg, todo, by_id, medians, stats, progress)
-
-    for r in final:
-        if r["reject"]:
-            count(stats, r["reject"])
-    stats["incomplete"] = stats["details"] > 0 and stats["detail_errors"] / stats["details"] > INCOMPLETE_ERROR_SHARE
-    passed = rules.finalize([r for r in final if not r["reject"]], cfg.budget)
-    seen = load_seen()
-    mark_seen(passed, seen)
-    return {"cfg": cfg, "stats": stats, "hits": hits, "raw": raw, "snippet": snippet, "final": final,
-            "passed": passed, "medians": medians, "seen": seen}
+        log.info("[detail] %d of %d listings need the full text (cap %d, %d saved ones reusable)",
+                 len(todo), len(hits), cfg.max_details, sum(reusable(by_id[r["ad_id"]], cache.get(r["ad_id"]))
+                                                           for r in todo[:cfg.max_details]))
+        details, inactive = await fetch_details(client, cfg, todo, by_id, cache, stats, progress)
+    hits = [h for h in hits if h["id"] not in inactive]
+    stats["unique"] = len(hits)
+    return evaluate(cfg, hits, details, stats)
 
 
-def run(cfg_path: Path = config.DEFAULT_FILE, on_progress=None) -> dict:
-    """Load settings, scan, write runs/<date_time>/. Returns a short summary.
+def reevaluate(folder: Path, cfg: config.Config) -> dict:
+    """Judge a saved dataset with the current rules: no searches, no API calls."""
+    rows = load_dataset(folder)
+    source = json.loads((folder / "run.json").read_text(encoding="utf-8")).get("stats", {})
+    stats = {"run_time": datetime.now().isoformat(timespec="seconds"), "review_of": folder.name,
+             "requests": 0, "details": 0, "reused": sum("attributes" in r for r in rows), "detail_errors": 0,
+             "detail_skipped": 0, "terms": source.get("terms", {}), "errors": [], "capped": source.get("capped", False),
+             "rejects": {}, "unique": len(rows)}
+    return evaluate(cfg, rows, {r["id"]: r for r in rows if "attributes" in r}, stats)
+
+
+def run(cfg_path: Path | None = None, on_progress=None) -> dict:
+    """Load settings, search, write runs/<date_time>/. Returns a short summary.
     `on_progress(counts)` receives live counts (found, details_done, details_total)."""
     cfg = config.load(cfg_path)
     result = asyncio.run(scan(cfg, Progress(on_progress)))
@@ -249,6 +318,15 @@ def run(cfg_path: Path = config.DEFAULT_FILE, on_progress=None) -> dict:
     folder = report.write_run(RUNS_DIR, result)
     save_seen(result["seen"], result["hits"])
     summary = report.summary(result, folder)
+    log.info("\n%s", summary["text"])
+    return summary
+
+
+def review(folder: Path, cfg_path: Path | None = None) -> dict:
+    """Re-evaluate a saved run with the current settings into runs/<date_time>_review/."""
+    result = reevaluate(folder, config.load(cfg_path))
+    out = report.write_run(RUNS_DIR, result, suffix="_review")
+    summary = report.summary(result, out)
     log.info("\n%s", summary["text"])
     return summary
 

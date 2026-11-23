@@ -16,7 +16,7 @@ HIT = {"id": "1", "title": "Gaming PC Ryzen 5 7600 RTX 4060 Ti 16GB 32GB DDR5", 
 
 def test_default_settings_load():
     cfg = config.load()
-    assert cfg.budget.limit == 700 and cfg.terms and cfg.prompt_file.name == "ai_pass.md"
+    assert cfg.policy.limit == 700 and cfg.terms and cfg.prompt_file.name == "ai_pass.md"
 
 
 def test_bad_settings_list_every_problem(tmp_path: Path):
@@ -59,8 +59,10 @@ class FakeClient:
         if tool == "search_kleinanzeigen":
             hits = [HIT, {**HIT, "id": "7", "title": "PC i7-12700K RTX 3060", "description": ""}]
             body = {"results": hits if args.get("query") == "3060" else [], "has_more": False}
-        else:
-            body = {**HIT, "attributes": {"Versand": "Nur Abholung"}, "seller_rating": 0.9}
+        else:   # the full listing of whichever ad was asked for
+            base = HIT if str(args["ad_id"]) == "1" else {**HIT, "id": "7", "title": "PC i7-12700K RTX 3060",
+                                                        "description": ""}
+            body = {**base, "attributes": {"Versand": "Nur Abholung"}, "seller_rating": 0.9}
         return type("R", (), {"content": [type("C", (), {"text": json.dumps(body)})], "isError": False})
 
 
@@ -72,9 +74,9 @@ def test_scan_end_to_end_offline(monkeypatch):
     cfg = config.load()
     cfg = config.Config(**{**cfg.__dict__, "terms": ("3060",), "bundles_enabled": False, "delay_s": 0})
     import asyncio
-    result = asyncio.run(deals.scan(cfg))
+    result = asyncio.run(deals.scan(cfg, cache={}))
     assert [r["ad_id"] for r in result["passed"]] == ["1"]
-    assert result["stats"]["rejects"] == {"intel_platform": 1} and result["stats"]["details"] == 1
+    assert result["stats"]["rejects"] == {"intel_platform": 1} and result["stats"]["details"] == 2  # full text for all
     assert result["passed"][0]["seller_rating"] == 0.9
 
 
@@ -95,7 +97,7 @@ def test_seen_file_is_atomic_and_survives_corruption(tmp_path: Path, monkeypatch
 
 def test_run_folder_has_every_document(tmp_path: Path):
     cfg = config.load()
-    rec = rules.finalize([rules.assess(HIT, cfg.budget)], cfg.budget)[0]
+    rec = rules.finalize([rules.assess(HIT, cfg.policy)], cfg.policy)[0]
     stats = {"run_time": "2026-11-23T12:00:00", "requests": 1, "details": 1, "detail_errors": 0, "detail_skipped": 0,
              "terms": {"3060": 1}, "errors": [], "capped": False, "rejects": {}, "unique": 1, "incomplete": False}
     result = {"cfg": cfg, "stats": stats, "hits": [HIT], "raw": {"1": HIT}, "snippet": [rec], "final": [rec],
@@ -144,3 +146,61 @@ def test_progress_counts_unique_listings():
     p.found([{"id": "2"}, {"id": "3"}])
     p.detail(1, 5)
     assert seen[-1] == {"found": 3, "details_done": 1, "details_total": 5}
+
+
+def _saved_run(tmp_path: Path, rows: list[dict]) -> Path:
+    folder = tmp_path / "2026-11-20_120000"
+    folder.mkdir()
+    (folder / "raw.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    (folder / "run.json").write_text(json.dumps({"stats": {"terms": {"3060": 2}}}), encoding="utf-8")
+    return folder
+
+
+def test_reevaluate_applies_new_rules_without_api(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(deals, "STATE_FILE", tmp_path / "seen.json")
+    am4 = {**HIT, "id": "5", "title": "Ryzen 7 5700X RTX 3060 12GB 16GB DDR4 B550", "attributes": {}}
+    folder = _saved_run(tmp_path, [{**HIT, "attributes": {}}, am4])
+    cfg = config.load()
+    strict = deals.reevaluate(folder, cfg)
+    assert [r["ad_id"] for r in strict["passed"]] == ["1"] and strict["stats"]["rejects"] == {"am4_under_32gb": 1}
+    loose = deals.reevaluate(folder, config.Config(**{**cfg.__dict__, "policy": rules.Policy(am4_min_ram=16)}))
+    assert {r["ad_id"] for r in loose["passed"]} == {"1", "5"} and loose["stats"]["review_of"] == folder.name
+
+
+def test_saved_full_text_is_reused_only_at_the_same_price():
+    cached = {**HIT, "attributes": {}, "_fetched_at": "2026-11-23T10:00:00"}
+    assert deals.reusable(HIT, cached)
+    assert not deals.reusable({**HIT, "price_amount": 600}, cached)
+    assert not deals.reusable(HIT, None)
+
+
+def test_reuse_skips_the_api_call(monkeypatch):
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "main", types.SimpleNamespace(mcp=None))
+    monkeypatch.setitem(sys.modules, "mcp", types.SimpleNamespace(Client=FakeClient))
+    cfg = config.load()
+    cfg = config.Config(**{**cfg.__dict__, "terms": ("3060",), "broad_terms": (), "bundles_enabled": False, "delay_s": 0})
+    import asyncio
+    cache = {"1": {**HIT, "attributes": {"Versand": "Versand möglich"}, "_fetched_at": "2026-11-23T10:00:00"}}
+    result = asyncio.run(deals.scan(cfg, cache=cache))
+    assert result["stats"]["reused"] == 1 and result["stats"]["details"] == 1   # only the uncached "7"
+    assert result["passed"][0]["ships"]                                          # the saved text was used
+
+
+def test_rules_changed_from_the_brief_are_listed():
+    from policy import deviations
+    text = " ".join(deviations(rules.Policy(am4_min_ram=16, allow_intel=True)))
+    assert "AM4 allowed from 16 GB" in text and "Intel platforms allowed" in text and "exceed the limit" in text
+
+
+def test_results_tab_groups_and_rule_counts():
+    import ui_results
+    import ui_rules
+    good = rules.finalize([rules.assess(HIT)])[0]
+    miss = rules.assess({**HIT, "id": "2", "price_amount": 840, "price_type": "FIXED"})
+    junk = rules.assess({**HIT, "id": "3", "price_amount": 5})
+    sections = [s for s, _ in ui_results.group([good, miss, junk])]
+    assert sections == ["Featured", "Closest misses", "Filtered"]
+    assert "Rejected: placeholder_price" in ui_results.details(junk)
+    assert ui_rules.reject_count({"am4_under_32gb": 4, "intel_platform": 9}, "am4_under_") == 4
