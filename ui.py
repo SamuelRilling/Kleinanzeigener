@@ -22,7 +22,7 @@ NOISY_LOGGERS = ("httpx", "mcp", "main", "kleinanzeigen", "FastMCP")
 FIELDS = [
     ("Location", [("location.home_zip", "Home postcode", str),
                   ("location.local_radius_km", "Local radius (km, marks pickup-friendly)", int)]),
-    ("Budget", [("budget.limit_eur", "Effective price limit (€)", int),
+    ("Budget", [("budget.limit_eur", "Price limit (€; which price: Selection rules)", int),
                 ("budget.target_eur", "Act-fast target (€)", int),
                 ("budget.stretch_eur", "Stretch for tier 0-1 deals (€)", int),
                 ("budget.am4_max_eur", "Cap for AM4 + 64 GB (€)", int),

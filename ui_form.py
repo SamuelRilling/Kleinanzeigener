@@ -16,7 +16,7 @@ def make_field(parent, row: int, label: str, kind: type, choices: tuple | None =
         ttk.Checkbutton(parent, variable=var).grid(row=row, column=col + 1, sticky="w")
     elif choices:
         var = tk.StringVar()
-        ttk.Combobox(parent, textvariable=var, values=choices, width=8, state="readonly").grid(
+        ttk.Combobox(parent, textvariable=var, values=choices, width=11, state="readonly").grid(
             row=row, column=col + 1, sticky="w")
     else:
         var = tk.StringVar()

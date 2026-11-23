@@ -13,14 +13,16 @@ import report
 URL_RE = re.compile(r"(https?://\S+)")
 SECTIONS = ("Featured", "Passing, not featured", "Bundles", "Special cases", "Closest misses", "Filtered")
 MISSES_SHOWN = 15
-COLUMNS = (("section", "Section", 140), ("eff", "Eff. €", 60), ("tier", "Tier", 40), ("title", "Listing", 360),
+COLUMNS = (("section", "Section", 140), ("ask", "List €", 55), ("eff", "Eff. €", 55), ("worst", "Worst €", 60),
+           ("tier", "Tier", 40), ("title", "Listing", 330),
            ("where", "Where", 210), ("flags", "Flags", 260))
 
 
 def group(records: list[dict]) -> list[tuple[str, dict]]:
     """(section, record) in report order."""
     passed = [r for r in records if not r["reject"]]
-    misses = sorted((r for r in records if r["reject"] in ("over_budget", "am4_over_550")), key=lambda r: r["effective"])
+    misses = sorted((r for r in records if r["reject"] in ("over_budget", "am4_over_550")),
+                    key=lambda r: r.get("budget", r["effective"]))
     return ([("Featured", r) for r in passed if r["track"] == "pc" and r.get("featured")]
             + [("Passing, not featured", r) for r in passed if r["track"] == "pc" and not r.get("featured")]
             + [("Bundles", r) for r in passed if r["track"] == "bundle"]
@@ -39,7 +41,7 @@ def details(r: dict) -> str:
     return (f"{r['title']}\n{r['url']} · {report.ask_txt(r)} · {report.where(r)}\n- Rejected: {why}"
             f"{' (a special case: worth it with a GPU bought)' if r['special'] else ''}\n- CPU {c['cpu']} · RAM {c['ram']} "
             f"· GPU {c['gpu']} · PSU {c['psu']} · SSD {c['ssd']}\n- Fixes {report.fixes_txt(r)} → effective "
-            f"{r['effective']} € · flags: {', '.join(r['flags'] + r['scam']) or '—'}\n\n> {text}")
+            f"{report.eff_txt(r)} € · flags: {', '.join(r['flags'] + r['scam']) or '—'}\n\n> {text}")
 
 
 class ResultsTab(ttk.Frame):
@@ -90,7 +92,9 @@ class ResultsTab(ttk.Frame):
 
     def show(self, folder) -> None:
         self.folder = folder
-        stats = json.loads((folder / "run.json").read_text(encoding="utf-8")).get("stats", {})
+        run = json.loads((folder / "run.json").read_text(encoding="utf-8"))
+        stats = run.get("stats", {})
+        basis = run.get("settings", {}).get("policy", {}).get("price_basis", "effective")
         with (folder / "listings.jsonl").open(encoding="utf-8") as f:
             records = [json.loads(line) for line in f if line.strip()]
         grouped = group(records)
@@ -98,14 +102,16 @@ class ResultsTab(ttk.Frame):
         source = f"re-evaluation of {stats['review_of']}" if stats.get("review_of") else "search"
         self.summary.configure(text=f"{folder.name} ({source}): {stats.get('unique', len(records))} listings · "
                                     + " · ".join(f"{s}: {n}" for s, n in counts.items())
-                                    + "\nDouble-click a row to open the listing. Links below are clickable.")
+                                    + f"\nBudget judged on the {basis} price. Worst € adds the fixes the listing "
+                                      "leaves open. Double-click a row to open the listing; links below are clickable.")
         self.tree.delete(*self.tree.get_children())
         self.rows = {}
         for i, (section, r) in enumerate(grouped):
             iid = str(i)
             tier = "" if r["tier"] is None else r["tier"]
             self.tree.insert("", "end", iid=iid, tags=(section,), values=(
-                section, r["effective"], tier, r["title"][:90], report.where(r),
+                section, f"{r['ask']:g}", r["effective"], r.get("worst", r["effective"]), tier, r["title"][:90],
+                report.where(r),
                 ", ".join(r["flags"] + ([r["reject"]] if r["reject"] else []))))
             self.rows[iid] = r
         self._show_text("Select a row to see its card and full listing text." if grouped else

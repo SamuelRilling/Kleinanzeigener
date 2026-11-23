@@ -10,25 +10,33 @@ from ui_form import changed, get_key, make_field
 
 # (key, label, kind, choices, reject reason it drives; a trailing "_" matches a prefix)
 RULES = [
-    ("rules.am4_min_ram_gb", "AM4 minimum RAM, GB (Brief: 64)", int, ("16", "32", "48", "64"), "am4_under_"),
+    ("budget.price_basis", "Price the limits are judged on", str, ("effective", "list"), None),
+    ("rules.am4_min_ram_gb", "DDR4 (AM4, DDR4 Intel) minimum RAM, GB (Brief: 64)", int, ("16", "32", "48", "64"),
+     "ddr4_under_"),
     ("rules.min_vram_gb", "Minimum GPU VRAM, GB (Brief: 12)", int, ("6", "8", "10", "12", "16"), "vram_under_"),
-    ("rules.allow_intel", "Allow Intel platforms (tier 5)", bool, None, "intel_platform"),
+    ("rules.allow_intel", "Judge Intel case by case (off: drop all; 10th gen and older always dropped)", bool, None,
+     "intel_"),
     ("rules.allow_arc", "Allow Intel Arc GPUs", bool, None, "intel_arc"),
     ("rules.allow_apu_x4", "Allow Ryzen 8500G / 8300G", bool, None, "apu_pcie_x4"),
     ("rules.allow_sff", "Allow Mini-ITX / small cases", bool, None, "itx_or_sff"),
     ("rules.allow_oem", "Allow OEM prebuilts (Dell, HP, Lenovo…)", bool, None, "oem_prebuilt"),
     ("rules.allow_mini_pc", "Allow mini-PCs / handhelds", bool, None, "mini_pc_or_handheld"),
+    ("rules.pickup_only", "Pickup-only listings (Nur Abholung)", str, ("keep", "local_only", "drop"), "pickup_"),
     ("rules.misprice_share", "Mispriced below share of GPU + RAM value (0 = off)", float, None, "price_below_parts_value"),
     ("rules.scam_signals_drop", "Scam signals that drop a listing", int, None, "scam_signals"),
 ]
 FIXES = [
+    ("fixes.psu_min_w", "Stated PSU below this is a fix (W)", int),
+    ("fixes.psu_min_24gb_w", "… for a 24 GB card (W)", int),
     ("fixes.psu_eur", "PSU fix (€)", int), ("fixes.psu_24gb_eur", "PSU fix for 24 GB cards (€)", int),
     ("fixes.cooler_eur", "Cooler fix (€)", int), ("fixes.ssd_eur", "SSD fix (€)", int),
     ("fixes.gpu_eur", "GPU for bundles / special cases (€)", int), ("fixes.case_eur", "Case for bundles (€)", int),
 ]
 
 
-def reject_count(rejects: dict, reason: str) -> int:
+def reject_count(rejects: dict, reason: str | None) -> int:
+    if not reason:
+        return 0
     return sum(n for r, n in rejects.items() if (r.startswith(reason) if reason.endswith("_") else r == reason))
 
 
