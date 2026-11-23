@@ -35,6 +35,25 @@ FINAL_AT_SNIPPET = {"intel_platform", "intel_arc", "not_desktop", "mini_pc_or_ha
                     "reserved", "oem_prebuilt", "gpu_only", "no_price", "placeholder_price", "price_not_for_whole_pc"}
 
 
+class Progress:
+    """Live counts for the launcher: unique listings found so far, full listings read."""
+
+    def __init__(self, callback=None):
+        self.callback, self.ids, self.done, self.total = callback, set(), 0, 0
+
+    def found(self, ads: list[dict]) -> None:
+        self.ids.update(a["id"] for a in ads)
+        self._emit()
+
+    def detail(self, done: int, total: int) -> None:
+        self.done, self.total = done, total
+        self._emit()
+
+    def _emit(self) -> None:
+        if self.callback:
+            self.callback({"found": len(self.ids), "details_done": self.done, "details_total": self.total})
+
+
 async def call(client, tool: str, args: dict, stats: dict) -> dict | None:
     """Tool call -> parsed dict, or None (logged + counted). The MCP server already
     retries 429/5xx with backoff, so a failure here is final for this item."""
@@ -50,7 +69,7 @@ async def call(client, tool: str, args: dict, stats: dict) -> dict | None:
         return None
 
 
-async def search(client, cfg: config.Config, stats: dict, label: str, extra: dict) -> dict:
+async def search(client, cfg: config.Config, stats: dict, label: str, extra: dict, progress: Progress) -> dict:
     """All pages of one search (up to pages_per_term) -> {id: hit}."""
     hits = {}
     for page in range(cfg.pages_per_term):
@@ -62,24 +81,30 @@ async def search(client, cfg: config.Config, stats: dict, label: str, extra: dic
         data = await call(client, "search_kleinanzeigen", args, stats)
         stats["requests"] += 1
         await asyncio.sleep(cfg.delay_s)
-        hits.update({a["id"]: a for a in (data or {}).get("results", [])})
+        ads = (data or {}).get("results", [])
+        hits.update({a["id"]: a for a in ads})
+        progress.found(ads)
         if not data or not data.get("has_more"):
             break
     stats["terms"][label] = len(hits)
-    log.info("[%s] %d ads", label, len(hits))
+    log.info("[%s] %d ads · %d listings found in total", label, len(hits), len(progress.ids))
     return hits
 
 
-async def discover(client, cfg: config.Config, stats: dict) -> list[dict]:
+async def discover(client, cfg: config.Config, stats: dict, progress: Progress) -> list[dict]:
+    """Local sweep, specific terms, bundles, then the broad terms last: they match the
+    most listings, so the request cap cuts them first."""
     local = await search(client, cfg, stats, f"local {cfg.local_radius_km} km (all)",
-                         {"zip_code": cfg.home_zip, "distance_km": cfg.local_radius_km})
+                         {"zip_code": cfg.home_zip, "distance_km": cfg.local_radius_km}, progress)
     hits = {}
     for term in cfg.terms:
-        hits.update(await search(client, cfg, stats, term, {"query": term}))
+        hits.update(await search(client, cfg, stats, term, {"query": term}, progress))
     if cfg.bundles_enabled:
         for term in cfg.bundle_terms:
             hits.update(await search(client, cfg, stats, f"bundle: {term}",
-                                     {"query": term, "category": cfg.bundle_category}))
+                                     {"query": term, "category": cfg.bundle_category}, progress))
+    for term in cfg.broad_terms:
+        hits.update(await search(client, cfg, stats, f"broad: {term}", {"query": term}, progress))
     hits.update({i: {**a, "local": True} for i, a in local.items()})
     if not hits and stats["errors"]:
         raise RuntimeError("All searches failed. First error: " + stats["errors"][0])
@@ -160,11 +185,13 @@ def count(stats: dict, reason: str) -> None:
 
 
 async def fetch_details(client, cfg: config.Config, todo: list[dict], by_id: dict, medians: dict,
-                        stats: dict) -> tuple[list[dict], dict]:
+                        stats: dict, progress: Progress) -> tuple[list[dict], dict]:
     final, raw = [], {}
-    for r in todo[:cfg.max_details]:
+    batch = todo[:cfg.max_details]
+    for r in batch:
         d = await call(client, "get_ad_detail", {"ad_id": int(r["ad_id"])}, stats)
         stats["details"] += 1
+        progress.detail(stats["details"], len(batch))
         await asyncio.sleep(cfg.delay_s)
         if d is None:
             stats["detail_errors"] += 1
@@ -179,8 +206,9 @@ async def fetch_details(client, cfg: config.Config, todo: list[dict], by_id: dic
     return final, raw
 
 
-async def scan(cfg: config.Config) -> dict:
+async def scan(cfg: config.Config, progress: Progress | None = None) -> dict:
     """Search + assess. Returns everything the report needs (no files written)."""
+    progress = progress or Progress()
     sys.path.insert(0, MCP_DIR)
     import main as ka_main  # kleinanzeigen-mcp server module, run in-process
     from mcp import Client
@@ -188,7 +216,7 @@ async def scan(cfg: config.Config) -> dict:
     stats = {"run_time": datetime.now().isoformat(timespec="seconds"), "requests": 0, "details": 0,
              "detail_errors": 0, "detail_skipped": 0, "terms": {}, "errors": [], "capped": False, "rejects": {}}
     async with Client(ka_main.mcp) as client:
-        hits = dedupe_reposts(await discover(client, cfg, stats))
+        hits = dedupe_reposts(await discover(client, cfg, stats, progress))
         stats["unique"] = len(hits)
         by_id = {h["id"]: h for h in hits}
         snippet = [rules.assess(h, cfg.budget) for h in hits]
@@ -199,7 +227,7 @@ async def scan(cfg: config.Config) -> dict:
                 count(stats, r["reject"])
         stats["detail_skipped"] = max(0, len(todo) - cfg.max_details)
         log.info("[detail] %d of %d listings need the full text (cap %d)", len(todo), len(hits), cfg.max_details)
-        final, raw = await fetch_details(client, cfg, todo, by_id, medians, stats)
+        final, raw = await fetch_details(client, cfg, todo, by_id, medians, stats, progress)
 
     for r in final:
         if r["reject"]:
@@ -212,10 +240,11 @@ async def scan(cfg: config.Config) -> dict:
             "passed": passed, "medians": medians, "seen": seen}
 
 
-def run(cfg_path: Path = config.DEFAULT_FILE) -> dict:
-    """Load settings, scan, write runs/<date_time>/. Returns a short summary."""
+def run(cfg_path: Path = config.DEFAULT_FILE, on_progress=None) -> dict:
+    """Load settings, scan, write runs/<date_time>/. Returns a short summary.
+    `on_progress(counts)` receives live counts (found, details_done, details_total)."""
     cfg = config.load(cfg_path)
-    result = asyncio.run(scan(cfg))
+    result = asyncio.run(scan(cfg, Progress(on_progress)))
     RUNS_DIR.mkdir(exist_ok=True)
     folder = report.write_run(RUNS_DIR, result)
     save_seen(result["seen"], result["hits"])

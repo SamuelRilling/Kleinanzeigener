@@ -114,3 +114,33 @@ def test_run_folder_has_every_document(tmp_path: Path):
 def test_excerpt_keeps_relevant_clauses():
     text = report.excerpt("Hallo zusammen!\nNetzteil: be quiet 750W\nSchönes Wochenende\nNur Abholung")
     assert "Netzteil" in text and "Abholung" in text and "Wochenende" not in text
+
+
+def test_am4_floor_setting_is_validated(tmp_path: Path):
+    path = tmp_path / "search.toml"
+    path.write_text(config.DEFAULT_FILE.read_text(encoding="utf-8").replace("am4_min_ram_gb = 32", "am4_min_ram_gb = 20"),
+                    encoding="utf-8")
+    with pytest.raises(ValueError, match="am4_min_ram_gb"):
+        config.load(path)
+
+
+def test_settings_save_keeps_comments_and_refuses_bad_values(tmp_path: Path):
+    path = tmp_path / "search.toml"
+    path.write_text(config.DEFAULT_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+    cfg = config.save({"search.ask_min_eur": 250, "search.broad_terms": ["PC", "Rechner"],
+                       "bundles.enabled": False}, path)
+    assert cfg.ask_min == 250 and cfg.broad_terms == ("PC", "Rechner") and not cfg.bundles_enabled
+    text = path.read_text(encoding="utf-8")
+    assert "ask_min_eur = 250             # asking price range searched" in text
+    with pytest.raises(ValueError, match="ask_min_eur"):
+        config.save({"search.ask_min_eur": 5000}, path)
+    assert config.load(path).ask_min == 250 and not list(tmp_path.glob("*.tmp.toml"))
+
+
+def test_progress_counts_unique_listings():
+    seen = []
+    p = deals.Progress(seen.append)
+    p.found([{"id": "1"}, {"id": "2"}])
+    p.found([{"id": "2"}, {"id": "3"}])
+    p.detail(1, 5)
+    assert seen[-1] == {"found": 3, "details_done": 1, "details_total": 5}
