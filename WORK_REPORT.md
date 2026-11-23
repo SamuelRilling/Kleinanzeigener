@@ -1,43 +1,70 @@
-# Kleinanzeigen Deals Engine — Work Report (v2)
+# Kleinanzeigen AI/Workstation PC Search — Work Report (v3)
 
-**Files:** `deals.py` (engine, ~520 lines), `test_deals.py` (60 offline tests), `deals_v1_backup.py` (previous version)
-**MCP server:** `C:\Users\Samuel\.config\opencode\mcp\kleinanzeigen-mcp` (run in-process)
+Finds used PCs on Kleinanzeigen.de and judges them by the Deal Evaluation Brief (`Target.md`), then writes
+everything a final AI pass needs into one dated folder.
 
-```bash
-python deals.py
-python -m pytest -q test_deals.py
-```
+## Use
 
-## Pipeline
+1. Edit `search.toml` (home, budget, price range, search terms, limits, bundle track, AI prompt files).
+2. Double-click `launch.bat`: the window shows the settings, **Confirm and start search** runs it in the
+   same window with a live log, then shows a summary and **Open results**.
+   Console alternative: `python deals.py`.
+3. Paste `runs/<date_time>/ai_prompt.md` into the AI.
 
-| Step | What happens |
+Tests (offline, no searches): `python -m pytest -q`
+
+## Output: `runs/<date_time>/`
+
+| File | Contents |
 |---|---|
-| 1. Discover | Searches category **228 "PCs"** (no bare GPUs or parts), `ad_type=OFFERED`, newest first. Budget split into 6 geometric price bands; pages are fetched **round-robin across bands**, so the 90-request budget covers the whole range. |
-| 2. Dedupe | By ad id, then reposts (same seller + same title → keep the cheapest). |
-| 3. Parse (snippet) | GPU (≈70 models: RTX 20–50, GTX 10/16, RX 5000–9000, Arc), CPU (Intel gen + tier, Core Ultra, Ryzen series + tier, X3D) and RAM, all regex-based with word boundaries. A bare GPU number needs its brand word (blocks "OptiPlex 5090"); VRAM isn't counted as RAM. |
-| 4. Filter | Exclusions: laptops/Macs, wanted ads, trade-only, bastler, defekt (negation-aware: "nicht defekt" passes), "ohne Grafikkarte"/"GPU nicht enthalten", standalone GPU ads, GPUs below `MIN_GPU_PERF`, and "nur Abholung"/"Selbstabholer" in the description text. |
-| 5. Value | Parts value = used GPU + CPU + RAM (capped at 32 GB) + €120 base. |
-| 6. Deal score | Value/price ÷ the **median value/price of comparable listings in the same scan** (same GPU, else same performance bracket). 1.0 = typical, 1.5 = 50% better than peers. Self-calibrating: high-end PCs aren't penalised for the market's higher asking prices. |
-| 7. Details | Full `get_ad_detail` only for the top 60 + 40 "gaming" listings whose GPU wasn't in the snippet. Re-parses the full text and adds Zustand, Versand and seller rating. |
-| 8. Output | `ka_run_<ts>/digest.md` (LLM prompt + filled top-25 table, ready to paste), `deals.jsonl` (all scored), `digest.json` (stats + market medians). |
-| 9. State | `seen.json` records ids and prices, so later runs flag `new` and `price_drop_from_X`. |
+| `results.md` | Report in Priming Brief §9 order: A pick, B shortlist (+ relevant listing text), B2 bundles, C seller questions (top 5 only), D special cases, E market notes, F search log, G closest misses |
+| `ai_prompt.md` | `prompts/ai_pass.md` (static instructions) + attached briefs + `results.md` |
+| `listings.jsonl` | Every assessed listing: parsed build with stated/assumed source per part, fixes, effective price, tier, verdict |
+| `raw.jsonl` | Raw search hit + full detail per listing |
+| `run.json` | Settings snapshot + run stats |
 
-Flags per listing: `vb`, `ships`, `commercial`, `too_cheap_check` (<55% of same-GPU median), `offplatform_payment`, `gpu_from_description`, `cpu_unknown`, `ram_unknown`, `ram_under_16gb`, `new`, `price_drop_*`.
+`runs/seen.json` remembers ids and prices between runs (flags `new_since_last_run`, `price_drop_from_X`).
 
-## API facts found while building (from live checks)
+## Code
 
-- Search hits only have a ~230-character description snippet, and their `ships` field is always false. Full text and the `Versand` attribute come from detail fetches only.
-- The `pcs.versand` attribute filter is broken: `ja` returns 0 results, `nein` returns everything. The `pcs.condition` filter drops ads with no condition set, so it isn't used.
-- Nearly every PC listing has `Versand: Nur Abholung`. Filtering on that field would remove ~90% of listings, so pickup exclusion uses the description text only (as originally specified). Setting `HOME_ZIP` instead searches only locally, with pickup allowed.
+| File | Role |
+|---|---|
+| `search.toml` / `config.py` | Settings; validated at load, every bad field reported at once |
+| `text.py` | Shared primitives: clauses (spec lines), `Label:` lines, "not installed" context (limits, support notes, history), negation |
+| `parse.py` | Text → parts: GPU + VRAM twins, CPU/platform, chipset, RAM size/layout/DDR, PSU, cooler, SSD, case, text rejects |
+| `rules.py` | The Brief as code: hard rejects, fix ledger → effective price, RAM path, tiers, tie-breakers, special cases, bundle track, risk signals, seller questions |
+| `deals.py` | Search (local sweep + terms + bundles), dedupe, snippet triage, best-first detail fetch, run |
+| `report.py` | Run folder writer and launcher summary |
+| `ui.py` / `launch.bat` | Tkinter launcher (stdlib) |
 
-## Latest run (€300–1500, nationwide)
+## How parsing stays robust
 
-90 searches → 2,653 unique listings → 1,032 candidates → 100 details → 0 errors.
-Top results span the budget: e.g. RTX 3070 PC €500 (1.60), RTX 4060 Ti + i7-14700KF €900 (1.52), RTX 3080 Ti + i7-10700KF €900 (1.42).
+- **Clauses and labels.** Text is split into spec lines; a `Grafikkarte:` / `Netzteil:` / `RAM:` line beats the
+  title, the title beats loose text. Wattage is read only from PSU lines and never right after a GPU/CPU name.
+- **Not-installed context.** "erweiterbar auf 64GB", "max. 128GB", "Ryzen 9000 ready", "vorher GTX 1060" are
+  skipped; "B450 Tomahawk MAX, 32GB" is not mistaken for a limit.
+- **Negation.** "kein Netzteil", "ohne SSD" become missing parts (priced as fixes); "nicht defekt" passes.
+- **Conflicts.** Title and description disagreeing (e.g. 32 vs 16 GB, two GPUs) mark the part assumed and
+  add a `conflict_*` flag and a seller question; the listing is not dropped.
+- **Assumptions decide price, not rejection** (Priming §6.2), and every assumed value shows `(?)`.
+
+## Pipeline safeguards
+
+- Full listings are fetched best-ranked first, so the `max_details` cap drops the weakest; skips are counted.
+- Reposts: same seller + title, or same seller + price + opening text, keep the cheapest.
+- More than 20 % failed detail fetches marks the run **INCOMPLETE** in the report and summary.
+- `seen.json` is written atomically and a corrupt file starts fresh instead of crashing.
+- Rate limits: the MCP server already retries 429/5xx with backoff.
+
+## API facts (from earlier live checks)
+
+- Search hits carry a ~230-character description snippet; full text, `Versand` and seller rating come from
+  detail fetches only.
+- The `pcs.versand` attribute filter is broken; shipping is read from the detail's `Versand` attribute.
+- Seller profiles (account age) return 403 from some IP ranges; the listing's seller rating is used instead.
 
 ## Known limits
 
-- The price tables (GPU/CPU used €, perf index) are hand estimates. Thanks to the peer-relative score, only the relative values between models matter much. Adjust them when the market moves.
-- A listing with no GPU named in its title or snippet only gets a second chance if it reads as "gaming" (capped at 40 per run).
-- CPUs written without a model number ("i7 8. Gen") get tier-only pricing.
-- Scores rank against asking prices, not sold prices. The LLM audit step (digest.md) is still the final judge.
+- Fix costs and GPU/RAM prices in `rules.py` are the Brief's estimates; adjust them as prices move.
+- The case is shown, never priced, for PCs (no reliable data without photos); bundles get a case fix if none is named.
+- No images are read; the AI pass or the seller questions settle what only photos show.
