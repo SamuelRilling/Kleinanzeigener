@@ -24,6 +24,8 @@ RULES = [
     ("rules.pickup_only", "Pickup-only listings (Nur Abholung)", str, ("keep", "local_only", "drop"), "pickup_"),
     ("rules.misprice_share", "Mispriced below share of GPU + RAM value (0 = off)", float, None, "price_below_parts_value"),
     ("rules.scam_signals_drop", "Scam signals that drop a listing", int, None, "scam_signals"),
+    ("prices.underpriced_pct", "Underpriced: ask this % below fair price (flag)", int, None, None),
+    ("prices.overpriced_pct", "Overpriced: ask this % above fair price (flag)", int, None, None),
 ]
 FIXES = [
     ("fixes.psu_min_w", "Stated PSU below this is a fix (W)", int),

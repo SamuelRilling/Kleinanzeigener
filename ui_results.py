@@ -7,14 +7,17 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk
 
+import config
 import deals
 import report
 
 URL_RE = re.compile(r"(https?://\S+)")
-SECTIONS = ("Featured", "Passing, not featured", "Bundles", "Special cases", "Closest misses", "Filtered")
+SECTIONS = ("Underpriced", "Featured", "Passing, not featured", "Bundles", "Special cases", "Closest misses",
+            "Filtered")
+PRICE_PROMPT = config.ROOT / "prompts" / "price_calibration.md"
 MISSES_SHOWN = 15
 COLUMNS = (("section", "Section", 140), ("ask", "List €", 55), ("eff", "Eff. €", 55), ("worst", "Worst €", 60),
-           ("tier", "Tier", 40), ("title", "Listing", 330),
+           ("fair", "Fair €", 55), ("delta", "Δ", 45), ("tier", "Tier", 40), ("title", "Listing", 300),
            ("where", "Where", 210), ("flags", "Flags", 260))
 
 
@@ -23,7 +26,9 @@ def group(records: list[dict]) -> list[tuple[str, dict]]:
     passed = [r for r in records if not r["reject"]]
     misses = sorted((r for r in records if r["reject"] in ("over_budget", "am4_over_550")),
                     key=lambda r: r.get("budget", r["effective"]))
-    return ([("Featured", r) for r in passed if r["track"] == "pc" and r.get("featured")]
+    under = sorted((r for r in passed + misses if r.get("value") == "under"), key=lambda r: r["fair_delta"])
+    return ([("Underpriced", r) for r in under]
+            + [("Featured", r) for r in passed if r["track"] == "pc" and r.get("featured")]
             + [("Passing, not featured", r) for r in passed if r["track"] == "pc" and not r.get("featured")]
             + [("Bundles", r) for r in passed if r["track"] == "bundle"]
             + [("Special cases", r) for r in records if r["special"]]
@@ -56,6 +61,7 @@ class ResultsTab(ttk.Frame):
         self.run_box.pack(side="left", padx=6)
         self.run_box.bind("<<ComboboxSelected>>", lambda _: self.show(deals.RUNS_DIR / self.run_var.get()))
         ttk.Button(top, text="Copy AI prompt", command=self.copy_prompt).pack(side="left", padx=(12, 0))
+        ttk.Button(top, text="Copy price prompt", command=self.copy_price_prompt).pack(side="left", padx=(6, 0))
         ttk.Button(top, text="Open results.md", command=lambda: self._open("results.md")).pack(side="left", padx=6)
         ttk.Button(top, text="Open folder", command=lambda: self._open("")).pack(side="left")
         self.summary = ttk.Label(self, text="", wraplength=940, justify="left")
@@ -73,7 +79,8 @@ class ResultsTab(ttk.Frame):
         scroll.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", lambda _: self._select())
         self.tree.bind("<Double-1>", lambda _: self._open_listing())
-        for section, color in zip(SECTIONS, ("#e8f5e9", "#fffde7", "#e3f2fd", "#f3e5f5", "#fff3e0", "#fbe9e7")):
+        colors = ("#c8e6c9", "#e8f5e9", "#fffde7", "#e3f2fd", "#f3e5f5", "#fff3e0", "#fbe9e7")
+        for section, color in zip(SECTIONS, colors):
             self.tree.tag_configure(section, background=color)
         panes.add(table, weight=3)
         self.text = tk.Text(panes, wrap="word", font=("Segoe UI", 9), state="disabled")
@@ -110,7 +117,8 @@ class ResultsTab(ttk.Frame):
             iid = str(i)
             tier = "" if r["tier"] is None else r["tier"]
             self.tree.insert("", "end", iid=iid, tags=(section,), values=(
-                section, f"{r['ask']:g}", r["effective"], r.get("worst", r["effective"]), tier, r["title"][:90],
+                section, f"{r['ask']:g}", r["effective"], r.get("worst", r["effective"]), r.get("fair") or "",
+                report.delta_txt(r), tier, r["title"][:90],
                 report.where(r),
                 ", ".join(r["flags"] + ([r["reject"]] if r["reject"] else []))))
             self.rows[iid] = r
@@ -139,6 +147,19 @@ class ResultsTab(ttk.Frame):
         sel = self.tree.selection()
         if sel and self.rows[sel[0]].get("url"):
             webbrowser.open(self.rows[sel[0]]["url"])
+
+    def copy_price_prompt(self) -> None:
+        """The calibration prompt, pointed at this run's components.csv and the current table."""
+        if not self.folder:
+            return
+        table = config.ROOT / "prices.toml"
+        current = table.read_text(encoding="utf-8") if table.exists() else "(none yet: start from the template)"
+        text = (PRICE_PROMPT.read_text(encoding="utf-8") + f"\n\n---\n\nDataset: {self.folder / 'components.csv'}\n"
+                f"Full listings: {self.folder / 'listings.jsonl'}\nWrite the result to: {table}\n\n"
+                f"Current prices.toml:\n```toml\n{current}\n```\n")
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.summary.configure(text="Price calibration prompt copied, pointed at " + self.folder.name + ".")
 
     def copy_prompt(self) -> None:
         if not self.folder:
