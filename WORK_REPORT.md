@@ -40,11 +40,12 @@ Tests (offline, no searches): `python -m pytest -q`
 
 | File | Contents |
 |---|---|
-| `results.md` | Report in Priming Brief §9 order: A pick, B shortlist (+ relevant listing text), B2 bundles, C seller questions (top 5 only), D special cases, E market notes, F search log, G closest misses |
+| `results.md` | Report in Priming Brief §9 order: A pick, B0 underpriced, B shortlist (+ relevant listing text), B2 bundles, C seller questions (top 5 only), D special cases, E market notes, F search log, G closest misses |
 | `ai_prompt.md` | `prompts/ai_pass.md` (priming) + `Target.md` (binding rules) + `results.md` |
 | `listings.jsonl` | Every assessed listing: parsed build with stated/assumed source per part, fixes, effective price, tier, verdict |
 | `raw.jsonl` | Raw search hit + full detail per listing |
 | `run.json` | Settings snapshot + run stats |
+| `components.csv` | Each listing's GPU / CPU / RAM / board in the price table's names: price calibration data |
 
 `runs/seen.json` remembers ids and prices between runs (flags `new_since_last_run`, `price_drop_from_X`).
 
@@ -57,6 +58,7 @@ Tests (offline, no searches): `python -m pytest -q`
 | `text.py` | Shared primitives: clauses (spec lines), `Label:` lines, "not installed" context (limits, support notes, history), negation |
 | `parse.py` | Text → parts: GPU + VRAM twins, CPU/platform, chipset, RAM size/layout/DDR, PSU, cooler, SSD, case, text rejects |
 | `hardware.py` | Brief §1/§4 component knowledge: GPU cards (used value, PCIe lanes/gen, Brief note), PCIe link, upgrade headroom, parts-value floor |
+| `prices.py` | Fair-price table (`prices.toml`): shape check, part names, fair price per listing, components.csv |
 | `rules.py` | The Brief as code: hard rejects, price sanity, fix ledger → effective price, RAM path, tiers, tie-breakers, needs-answers ranking, featuring, special cases, bundle track, risk signals, seller questions |
 | `prompts/ai_pass.md` | The AI-pass priming: goal, user, market, how the program works and where it is weak, what to do, answer format |
 | `deals.py` | Search, dedupe, full-text fetch with reuse, pure evaluation, re-evaluation of saved runs |
@@ -86,6 +88,22 @@ Tests (offline, no searches): `python -m pytest -q`
   cards), no SSD / under 1 TB, a stated stock cooler on a hot CPU. A PC sold as working that does not mention a part
   has one: flagged (`psu_unstated`, `psu_brand_unknown`, `ssd_unstated`, `cooler_unstated`, …) and in Worst € only.
   This changes the Brief, which counts every unconfirmed part, and is listed in every report.
+
+## Fair prices (hand-calibrated)
+
+- An agent runs `prompts/price_calibration.md` ("Copy price prompt" on the Results tab points it at the selected
+  run) and writes `prices.toml`: used € per GPU, CPU, RAM amount and board, plus a whole-PC factor and a base for
+  the small parts. The prompt fixes the file's shape; `prices.py` validates it at load.
+- Procedure in the prompt: seed at 70 % of today's new price (RAM 85 %), then refit round by round: each listing's
+  error is shared among its parts by value, each part moves to the median of its implied prices, shrunk toward
+  its seed (weight 5 listings), halfway per round, outliers > 60 % excluded, every fifth listing held out to
+  measure the error.
+- Every run writes `components.csv`: each listing's parts in the table's names, the calibration data.
+- With a table, every listing gets **Fair €** and **Δ**. `prices.underpriced_pct` (15) and `overpriced_pct` (20)
+  set the `underpriced_…` / `overpriced_…` flags, only when GPU, CPU and RAM were stated. Flags only: nothing is
+  dropped. Underpriced listings get section B0 and the Results tab's first group, and are featured even when they
+  need seller answers.
+- VB listings: expected price = the fair price when it is below the usual haggle, but at most 15 % off the ask.
 
 ## Ranking and featuring
 

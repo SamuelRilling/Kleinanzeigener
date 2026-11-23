@@ -52,6 +52,17 @@ column shows counted fixes, then "(unconfirmed: …)". The defaults:
 - Bundles only: GPU 220 € (a used RTX 3060 12 GB) and case 65 € if no case is named (always counted).
 A PSU of 650-749 W passes the price but not tier 1 or Headroom: the next big GPU still needs a new one.
 
+**Fair price** (when the user has calibrated `prices.toml`): fair € = factor × (used GPU + CPU + RAM + board) + base,
+from a table fitted by hand to this market's asks. Cards show it with the ask's deviation (Δ). Only listings whose
+GPU, CPU and RAM were read, not assumed, are judged:
+- `underpriced_…pct`: the ask is well below fair (threshold in the settings). The **likely good deals**: section B0
+  lists them, passing ones and near misses. An underpriced listing that needs seller answers is still featured.
+- `overpriced_…pct`: well above fair. A flag only; it may still be the best option.
+- `vb_target_from_fair_price`: a VB listing priced above fair; its expected price is the fair price, never more than
+  15 % off the ask (instead of the flat haggle).
+The table is an estimate from asking prices, not sold prices; its holdout error is in its header. Treat Δ as a strong
+hint, not a fact: a big negative Δ can also mean a misread part, so check those cards first.
+
 The case of a complete PC is never priced; it shows under Headroom.
 
 **Limit:** the results header states it. Tier 0-1 listings may exceed it by a small stretch the user allowed for very
@@ -104,7 +115,7 @@ featured only if its price + 490 € for RAM still beats the best tier 0-2 PC.
   - Free RAM slots; whether there is a PCIe 5.0 slot; Zen 6 upgrade on AM5, or a dead-end socket (Intel: which,
     and whether the CPU is already strong).
 - **Flags:**
-  - Buying signals: `act_fast` (tier 0-2 at or under target), `receipt`.
+  - Buying signals: `act_fast` (tier 0-2 at or under target), `underpriced_…pct`, `receipt`.
   - Data gaps: `needs_answers`, `conflict_…`, `…_missing` (seller says the part is not included; priced as a fix),
     the unconfirmed-fix flags above.
   - Hardware notes: `pcie_link_reduced`, `amd_gpu_secondary` (weaker for CUDA tools), `ram_slots_full`,
@@ -138,11 +149,12 @@ featured only if its price + 490 € for RAM still beats the best tier 0-2 PC.
    the listing. If a change moves a listing across a reject rule, the limit or a tier, move it.
 2. **Read for what patterns miss:** a parted-out PC, contradictions, wanted ads, scam tone (pressure, copy-paste text,
    payment outside the platform), bodged repairs (reject), stolen-goods hints, a listing that is not a PC.
-3. **Look at B3** (passing, not featured) for a listing that would become the pick if its likely answer comes back
+3. **Look at B0** (underpriced): confirm each one's parts against its text; a real one moves up your shortlist.
+4. **Look at B3** (passing, not featured) for a listing that would become the pick if its likely answer comes back
    well. Name it only if it would beat the current pick.
-4. **Pick** one listing, or say plainly that none passes: name the closest misses (G) and what would have to change.
+5. **Pick** one listing, or say plainly that none passes: name the closest misses (G) and what would have to change.
    Do not lower a rule. If the market shows a rule is wrong, say so as a recommendation.
-5. **Seller messages:** for each listing worth pursuing that has open questions. Start from the program's draft
+6. **Seller messages:** for each listing worth pursuing that has open questions. Start from the program's draft
    where there is one, drop what the text already answers, keep it short and numbered.
 
 ## Your answer
