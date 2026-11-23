@@ -78,11 +78,11 @@ def test_bundle_track_prices_gpu_and_case():
 
 def test_gpu_less_intel_is_not_a_bundle():
     r = rules.assess({"title": "Aufrüstkit i5-12400F B660 16GB", "description": "", "price_amount": 200, "image_count": 3})
-    assert r["track"] == "pc" and r["reject"] == "intel_platform"
+    assert r["track"] == "pc" and r["reject"] == "gpu_unknown"
 
 
 def test_budget_comes_from_config():
     tight = rules.Policy(limit=400, target=300)
-    r = rules.assess({"title": "Ryzen 5 7600 RTX 3060 12GB 32GB DDR5", "description": "", "price_amount": 300,
+    r = rules.assess({"title": "Ryzen 5 7600 RTX 3060 12GB 32GB DDR5", "description": "", "price_amount": 450,
                       "image_count": 3}, tight)
-    assert r["reject"] == "over_budget"  # 300 + PSU + SSD fixes > 400
+    assert r["reject"] == "over_budget"

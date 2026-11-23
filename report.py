@@ -60,7 +60,8 @@ def build_cells(r: dict) -> dict:
 
 def where(r: dict) -> str:
     place = f"{r['location'] or '?'} {r['zip'] or ''}".strip()
-    return f"{place} · {'local' if r['local'] else 'far'} · {'Versand' if r['ships'] else 'Abholung'}"
+    ship = "nur Abholung" if r.get("pickup_only") else "Versand" if r["ships"] else "Abholung"
+    return f"{place} · {'local' if r['local'] else 'far'} · {ship}"
 
 
 def ask_txt(r: dict) -> str:
@@ -68,7 +69,29 @@ def ask_txt(r: dict) -> str:
 
 
 def fixes_txt(r: dict) -> str:
-    return " + ".join(f"{k} {v}" for k, v in r["fixes"].items()) or "0"
+    """Counted fixes, then the ones the listing leaves open (worst case only)."""
+    sure = " + ".join(f"{k} {v}" for k, v in r["fixes"].items()) or "0"
+    maybe = " + ".join(f"{k} {v}" for k, v in r.get("maybe_fixes", {}).items())
+    return sure + (f" (unconfirmed: {maybe})" if maybe else "")
+
+
+def eff_txt(r: dict) -> str:
+    worst = r.get("worst", r["effective"])
+    return f"{r['effective']}" + (f" (worst {worst})" if worst != r["effective"] else "")
+
+
+def intel_txt(r: dict) -> str:
+    """Intel facts and the AM5 alternative, for cards; empty for other platforms."""
+    i = r["build"].get("intel")
+    if not i:
+        return ""
+    on_cpu = rules.experts_on_cpu(r["build"])
+    avx = "AVX-512 ✓" if i["avx512"] else (f"no AVX-512, {on_cpu} GB of experts on the CPU" if on_cpu
+                                         else "no AVX-512, but the model fits in VRAM")
+    best = f" (best AM5 deal here: {r['best_am5']} €)" if r.get("best_am5") is not None else ""
+    return (f"- Intel: {i['socket']}, gen {i['gen']}{' (assumed)' if i['gen_src'] == 'assumed' else ''} · {avx} · "
+            f"CPU {'strong: socket kept as is' if i['strong'] else 'not strong: dead socket counts'} · "
+            f"AM5 swap ≈ {r['am5_swap']} € → {r['budget'] + r['am5_swap']} € as an AM5 PC{best}")
 
 
 def path_txt(r: dict) -> str:
@@ -82,13 +105,13 @@ def rating_txt(r: dict) -> str:
 
 
 HEADER = ("| # | Listing | Ask | Where | Listed | CPU [platform] | RAM (layout) | GPU (VRAM) | PSU | Tier | Day-one AI "
-          "| Fixes € | Effective € | RAM path € | PCIe link | Headroom | Flags |\n" + "|---" * 17 + "|")
+          "| Fixes € | Effective € (worst) | RAM path € | PCIe link | Headroom | Flags |\n" + "|---" * 17 + "|")
 
 
 def row(i: int, r: dict) -> str:
     c = build_cells(r)
     cells = [i, f"[{r['title'][:55]}]({r['url']})", ask_txt(r), where(r), (r["posted"] or "?")[:10], c["cpu"],
-             c["ram"], c["gpu"], c["psu"], rules.TIER_NAMES[r["tier"]], r["ai"], fixes_txt(r), f"**{r['effective']}**",
+             c["ram"], c["gpu"], c["psu"], rules.TIER_NAMES[r["tier"]], r["ai"], fixes_txt(r), f"**{eff_txt(r)}**",
              path_txt(r), (r["link"] or {}).get("text", "—"), r["headroom"]["text"], ", ".join(r["flags"]) or "—"]
     return "| " + " | ".join(str(x).replace("|", "/") for x in cells) + " |"
 
@@ -108,7 +131,8 @@ def card(i: int, r: dict) -> str:
         f"- GPU note: {r['gpu_note'] or '—'} · PCIe link {(r['link'] or {}).get('text', '—')}",
         f"- Headroom: {r['headroom']['text']}",
         f"- Tier {rules.TIER_NAMES[r['tier']]} · day-one AI {r['ai']} · fixes {fixes_txt(r)} → effective "
-        f"**{r['effective']} €** · RAM path {path_txt(r)}",
+        f"**{eff_txt(r)} €** · RAM path {path_txt(r)}",
+        *([intel_txt(r)] if intel_txt(r) else []),
         f"- Unknowns: {unknown}{' (needs seller answers)' if r['needs_answers'] else ''} · flags: "
         f"{', '.join(r['flags']) or '—'}",
         f"\n> {text}\n",
@@ -137,20 +161,22 @@ def section_pick(featured: list[dict]) -> str:
     if not featured:
         return "## A. Pick\n\nNo PC is featured. See B (not featured), B2 (bundles), D (special cases), G (misses).\n"
     r = featured[0]
-    return (f"## A. Pick by code: B #1, {r['title'][:60]} — effective {r['effective']} €, tier {r['tier']}"
+    return (f"## A. Pick by code: B #1, {r['title'][:60]} — ask {r['ask']:g} €, effective {eff_txt(r)} €, "
+            f"tier {r['tier']}"
             f"{', act fast' if 'act_fast' in r['flags'] else ''} (the AI pass confirms or overrules)\n")
 
 
 def section_shortlist(featured: list[dict], others: list[dict]) -> str:
     out = ["## B. Shortlist: featured PCs\n",
            "Ranked tier → needs answers → RAM → NVIDIA → VRAM → board → PSU → 2 sticks → PCIe 5 → CPU → effective €. "
-           "`(?)` = assumed or contradicted. Effective € = ask (VB: haggled) + fixes.\n", HEADER,
+           "`(?)` = assumed or contradicted. Effective € = ask (VB: haggled) + the fixes the listing confirms; "
+           "worst = + the fixes it leaves open.\n", HEADER,
            *[row(i, r) for i, r in enumerate(featured[:SHORTLIST], 1)], "\n## B1. Verification cards (featured)\n",
            *[card(i, r) for i, r in enumerate(featured[:SHORTLIST], 1)]]
     if others:
         out.append(f"## B3. Passing but not featured ({len(others)}): needs seller answers on a non-top deal, "
                    "or a 16 GB build the RAM step makes dearer than a tier 1-2 PC\n")
-        out += [f"- [{r['title'][:55]}]({r['url']}) — {ask_txt(r)} → eff {r['effective']} · tier {r['tier']} · "
+        out += [f"- [{r['title'][:55]}]({r['url']}) — {ask_txt(r)} → eff {eff_txt(r)} · tier {r['tier']} · "
                 f"{build_cells(r)['ram']} · {build_cells(r)['gpu']} · unknowns: {', '.join(r['unknown']) or '—'} · "
                 f"{', '.join(f for f in r['flags'] if f in ('needs_answers', 'dominated_by_tier12'))}"
                 for r in others[:NOT_FEATURED_SHOWN]]
@@ -180,7 +206,7 @@ def section_special(final: list[dict], policy: Policy) -> str:
     for r in (r for r in final if r["special"]):
         c = build_cells(r)
         out.append(f"- [{r['title'][:60]}]({r['url']}) — {ask_txt(r)}, {c['cpu']}, {c['ram']}, {c['gpu']}; effective "
-                   f"{r['effective']} + GPU {policy.fix_gpu} = **{r['effective'] + policy.fix_gpu} €** · {where(r)}")
+                   f"{r['budget']} + GPU {policy.fix_gpu} = **{r['budget'] + policy.fix_gpu} €** · {where(r)}")
     return "\n".join(out) + ("\n" if len(out) > 1 else "None found.\n")
 
 
@@ -207,8 +233,8 @@ def section_log(stats: dict, cfg) -> str:
 
 
 def section_misses(records) -> str:
-    misses = sorted((r for r in records if r["reject"] in ("over_budget", "am4_over_550")), key=lambda r: r["effective"])
-    lines = [f"- [{r['title'][:55]}]({r['url']}) — {ask_txt(r)} → eff **{r['effective']}** ({r['reject']}; fixes "
+    misses = sorted((r for r in records if r["reject"] in ("over_budget", "am4_over_550")), key=lambda r: r["budget"])
+    lines = [f"- [{r['title'][:55]}]({r['url']}) — {ask_txt(r)} → eff **{eff_txt(r)}** ({r['reject']}; fixes "
              f"{fixes_txt(r)}) · {build_cells(r)['ram']} · {build_cells(r)['gpu']}" for r in misses[:CLOSEST_MISSES]]
     return "## G. Closest misses (over the limit only)\n\n" + ("\n".join(lines) or "None.") + "\n"
 
@@ -241,8 +267,8 @@ def render(result: dict) -> str:
     every = list({**{r["ad_id"]: r for r in result["snippet"]}, **{r["ad_id"]: r for r in result["final"]}}.values())
     return "\n".join([
         f"# Kleinanzeigen search results — {stats['run_time'][:16]}\n", banner,
-        f"{len(featured)} featured PCs, {len(others)} more passing, {len(bundles)} bundles (effective ≤ {policy.limit} €"
-        f"). Code applied the Brief's rejects, fixes and tiers.\n",
+        f"{len(featured)} featured PCs, {len(others)} more passing, {len(bundles)} bundles ({policy.price_basis} "
+        f"price ≤ {policy.limit} €). Code applied the Brief's rejects, fixes and tiers.\n",
         section_rules(policy),
         section_pick(featured), section_shortlist(featured, others), section_bundles(bundles, policy),
         section_questions(featured), section_special(result["final"], policy),
@@ -291,7 +317,7 @@ def summary(result: dict, folder: Path) -> dict:
              f"full text {stats['details']} fetched + {stats.get('reused', 0)} reused, {len(featured)} featured PCs, "
              f"{len(passed)} passing in total, "
              f"{sum(r['special'] for r in result['final'])} special cases."]
-    lines += [f"  {i}. {r['effective']} € eff · tier {r['tier']} · {r['title'][:60]}" for i, r in enumerate(featured[:5], 1)]
+    lines += [f"  {i}. {r['ask']:g} € ask · {eff_txt(r)} € eff · tier {r['tier']} · {r['title'][:60]}" for i, r in enumerate(featured[:5], 1)]
     top = sorted(stats["rejects"].items(), key=lambda x: -x[1])[:5]
     lines.append("Top rejects: " + (", ".join(f"{k} {v}" for k, v in top) or "none"))
     lines.append(f"Output: {folder}")

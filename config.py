@@ -5,7 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from policy import DEFAULT_POLICY, Policy
+from policy import DEFAULT_POLICY, PICKUP_CHOICES, PRICE_BASES, Policy
 
 ROOT = Path(__file__).parent
 DEFAULT_FILE = ROOT / "search.toml"
@@ -14,10 +14,13 @@ SORTS = {"DATE_DESCENDING", "PRICE_ASCENDING", "RECOMMENDED"}
 POLICY_KEYS = {
     "limit": "budget.limit_eur", "target": "budget.target_eur", "stretch": "budget.stretch_eur",
     "am4_max": "budget.am4_max_eur", "vb_discount": "budget.vb_discount", "special_max": "budget.special_max_eur",
+    "price_basis": "budget.price_basis",
     "am4_min_ram": "rules.am4_min_ram_gb", "min_vram": "rules.min_vram_gb", "allow_intel": "rules.allow_intel",
     "allow_arc": "rules.allow_arc", "allow_apu_x4": "rules.allow_apu_x4", "allow_sff": "rules.allow_sff",
     "allow_oem": "rules.allow_oem", "allow_mini_pc": "rules.allow_mini_pc",
+    "pickup_only": "rules.pickup_only",
     "misprice_share": "rules.misprice_share", "scam_signals_drop": "rules.scam_signals_drop",
+    "psu_min_w": "fixes.psu_min_w", "psu_min_24gb_w": "fixes.psu_min_24gb_w",
     "fix_psu": "fixes.psu_eur", "fix_psu_24gb": "fixes.psu_24gb_eur", "fix_cooler": "fixes.cooler_eur",
     "fix_ssd": "fixes.ssd_eur", "fix_gpu": "fixes.gpu_eur", "fix_case": "fixes.case_eur",
 }
@@ -114,6 +117,12 @@ def _sanity(cfg: dict, policy: dict) -> list[str]:
         e.append("rules.am4_min_ram_gb: one of 16, 32, 48, 64")
     if policy["min_vram"] not in (4, 6, 8, 10, 11, 12, 16, 20, 24):
         e.append("rules.min_vram_gb: a VRAM size such as 8, 12 or 16")
+    if policy["price_basis"] not in PRICE_BASES:
+        e.append(f"budget.price_basis: one of {list(PRICE_BASES)}")
+    if policy["pickup_only"] not in PICKUP_CHOICES:
+        e.append(f"rules.pickup_only: one of {list(PICKUP_CHOICES)}")
+    if not 300 <= policy["psu_min_w"] <= policy["psu_min_24gb_w"] <= 1600:
+        e.append("fixes.psu_min_w / psu_min_24gb_w: watts, 300-1600, the 24 GB one not lower")
     if not 0 <= policy["misprice_share"] <= 1:
         e.append("rules.misprice_share: between 0 (off) and 1")
     if policy["scam_signals_drop"] < 1:

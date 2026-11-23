@@ -25,11 +25,26 @@ PRICE_SCOPE_RE = re.compile(
     r"arbeitsspeicher|mainboard|netzteil|geh(?:ä|ae)use|einzel)|preis\s+pro\s+(?:st(?:ü|ue)ck|teil|komponente)|"
     r"st(?:ü|ue)ckpreis|einzelpreis|preise?\s+(?:siehe|laut)\s+(?:beschreibung|liste)|\bab\s+\d+\s*(?:€|euro)|anzahlung")
 BUNDLE_RE = re.compile(r"aufr(?:ü|ue)st[\s-]*(?:kit|set|pc|paket)|\bbundle\b|\bkit\b")
-TIER_NAMES = {0: "0 (24 GB NVIDIA)", 1: "1", 2: "2", 3: "3 (no day-one agent)", 4: "4 (AM4 64 GB+)",
-              5: "5 (dead-end platform: AM4 under 64 GB or Intel)"}
+TIER_NAMES = {0: "0 (24 GB NVIDIA)", 1: "1", 2: "2", 3: "3 (no day-one agent)",
+              4: "4 (AM4 64 GB+, or Intel with one drawback)",
+              5: "5 (dead end: AM4 under 64 GB, or Intel with both drawbacks)"}
+# Brief §3 table: (min RAM GB, min VRAM GB, day-one model, its experts in GB). UD-IQ4's
+# experts are not in the Brief: an estimate from its 66-76 GB download.
+AI_TIERS = [(96, 0, "UD-IQ4 (headroom)", 65), (64, 0, "IQ3_S (ideal)", 50),
+            (48, 0, "IQ2_XS (good, borderline fit)", 36), (32, 24, "IQ2_XS (good: 24 GB VRAM covers the gap)", 36),
+            (32, 0, "Coder IQ1_M (good coding)", 23), (0, 0, "none (needs RAM)", 23)]
+VRAM_RESERVE_GB = 1          # estimate: attention + KV cache kept on the GPU next to the experts
+# Moving an Intel PC onto AM5 (€, used, Nov 2026 estimates): board + CPU bought, Intel board + CPU sold.
+AM5_SWAP_BOARD = 120         # used B650
+AM5_SWAP_CPU = 140           # used Ryzen 5 7600
+INTEL_RESALE = {"LGA1851": 180, "LGA1700": 120, "LGA1200": 70}
+INTEL_RESALE_STRONG = 100    # extra for a strong CPU (i5-13600K / i7 / i9 / Ultra 7 class)
 # Text rejects a policy switch can turn off.
 FATAL_SWITCHES = {"oem_prebuilt": "allow_oem", "mini_pc_or_handheld": "allow_mini_pc"}
 
+PICKUP_ONLY_RE = re.compile(r"nur\s+(?:an\s+|für\s+|gegen\s+|bei\s+)?(?:selbst)?abhol\w*|selbstabholer|"
+                            r"kein(?:en)?\s+versand|versand\s+(?:ist\s+)?(?:nicht\s+möglich|ausgeschlossen)|"
+                            r"(?:wird\s+)?nicht\s+versendet|keine?\s+versendung|versende\s+nicht")
 SHIP_ONLY_RE = re.compile(r"nur\s+(?:per\s+)?versand|keine?\s+abholung|abholung\s+(?:ist\s+)?nicht\s+möglich")
 ABROAD_RE = re.compile(r"im\s+ausland|derzeit\s+(?:im\s+ausland|unterwegs)|beruflich\s+unterwegs")
 OFFPLATFORM_RE = re.compile(r"whatsapp|paypal\s+freunde|freunde\s+(?:und|&)\s+familie|vorkasse|western\s+union|"
@@ -76,12 +91,16 @@ def extract(title: str, desc: str) -> dict:
     psu = parse.parse_psu(title, desc) or {"watts": None, "trusted": False, "missing": False}
     storage = parse.parse_storage(title, desc)
     cooler = parse.parse_cooler(title, desc)
+    intel = hardware.intel_facts(cpu, chipset, ddr) if platform == "INTEL" else None
     return {
+        "intel": intel, "ddr_stated": ddr is not None,
         "gpu": gpu, "cpu": cpu, "chipset": chipset, "case": case,
         "platform": _val(platform, platform_src),
         "ram_gb": _val(ram or 16, "stated" if ram and not ram_conflict else "assumed"),
         "ram_layout": ram_layout,
-        "ddr": ddr or (5 if platform == "AM5" else 4 if platform == "AM4" else None),
+        # unstated DDR: AM5 and Core Ultra 5, else 4 (the worst case on LGA1700)
+        "ddr": ddr or (5 if platform == "AM5" or (intel and intel["gen"] >= parse.ULTRA_GEN)
+                       else 4 if platform in ("AM4", "INTEL") else None),
         "two_slots": two_slots,
         "itx": case["sff"],
         "psu": _val(psu, "stated" if psu["watts"] or psu["trusted"] or psu["missing"] else "assumed"),
@@ -97,6 +116,8 @@ def hard_reject(b: dict, policy: Policy, ignore_vram: bool = False) -> str | Non
     gpu, cpu, platform = b["gpu"], b["cpu"], b["platform"]["v"]
     if platform == "INTEL" and not policy.allow_intel:
         return "intel_platform"
+    if platform == "INTEL" and b["intel"]["old"]:
+        return "intel_old"
     if not cpu:
         return "cpu_unknown"
     if not gpu:
@@ -105,10 +126,11 @@ def hard_reject(b: dict, policy: Policy, ignore_vram: bool = False) -> str | Non
         return "intel_arc"
     if gpu["vram"] < policy.min_vram and not ignore_vram:
         return f"vram_under_{policy.min_vram}gb"
-    if cpu.get("model") in APU_X4 and cpu.get("suffix") in ("G", "F") and not policy.allow_apu_x4:
+    if platform != "INTEL" and cpu.get("model") in APU_X4 and cpu.get("suffix") in ("G", "F") and not policy.allow_apu_x4:
         return "apu_pcie_x4"
-    if platform == "AM4" and b["ram_gb"]["v"] < policy.am4_min_ram:
-        return f"am4_under_{policy.am4_min_ram}gb"
+    ddr4_dead_end = platform == "AM4" or (platform == "INTEL" and b["ddr"] == 4 and b["ddr_stated"])
+    if ddr4_dead_end and b["ram_gb"]["v"] < policy.am4_min_ram:
+        return f"ddr4_under_{policy.am4_min_ram}gb"
     if b["itx"] and not policy.allow_sff:
         return "itx_or_sff"
     return None
@@ -128,25 +150,56 @@ def with_bought_gpu(b: dict) -> dict:
     return {**b, "gpu": gpu}
 
 
-def fixes(b: dict, policy: Policy = DEFAULT_POLICY, bundle: bool = False) -> dict:
-    """{deficit: €} counting toward the limit (Brief §5)."""
+def fix_ledger(b: dict, policy: Policy = DEFAULT_POLICY, bundle: bool = False) -> dict:
+    """{part: (€, confirmed)} (Brief §5). Confirmed: the listing says the part is missing or
+    too weak, so the fix counts toward the price. Unconfirmed: the part is not mentioned, or
+    its brand, size or type is not, on a PC sold as working; flagged and in the worst case only."""
     out = {}
     psu, gpu = b["psu"]["v"], b["gpu"] or {}
-    need = 850 if gpu.get("vram", 0) >= 24 else 750
-    if not (psu["trusted"] and (psu["watts"] or 0) >= need):
-        out["psu"] = policy.fix_psu_24gb if need == 850 else policy.fix_psu
+    big = gpu.get("vram", 0) >= 24
+    need, eur = (policy.psu_min_24gb_w, policy.fix_psu_24gb) if big else (policy.psu_min_w, policy.fix_psu)
+    if psu["missing"] or (psu["watts"] and psu["watts"] < need):
+        out["psu"] = (eur, True)
+    elif not (psu["trusted"] and psu["watts"]):
+        out["psu"] = (eur, False)
     cpu = b["cpu"] or {}
-    hot = cpu.get("suffix") == "X3D" or (cpu.get("suffix") == "X" and (cpu.get("model") or "")[:1] == "7") \
-        or (cpu.get("model") or "") in ("9900", "9950")
+    model, suffix = cpu.get("model") or "", cpu.get("suffix") or ""
+    if cpu.get("platform") == "INTEL":
+        hot = "K" in suffix                       # 125 W+ unlocked parts
+    else:
+        hot = suffix == "X3D" or (suffix == "X" and model[:1] == "7") or model in ("9900", "9950")
     if hot and b["cooler"]["v"] != "tower":
-        out["cooler"] = policy.fix_cooler
+        out["cooler"] = (policy.fix_cooler, b["cooler"]["src"] == "stated")   # a stated stock cooler
     st = b["storage"]["v"]
     if not (st["nvme"] and (st["gb"] or 0) >= 960):
-        out["ssd"] = policy.fix_ssd
+        out["ssd"] = (policy.fix_ssd, st["missing"] or (st["gb"] is not None and st["gb"] < 960))
     if bundle:
-        out["gpu"] = policy.fix_gpu
+        out["gpu"] = (policy.fix_gpu, True)
         if not b["case"]["name"]:
-            out["case"] = policy.fix_case
+            out["case"] = (policy.fix_case, True)
+    return out
+
+
+def fixes(b: dict, policy: Policy = DEFAULT_POLICY, bundle: bool = False) -> dict:
+    """{deficit: €} counting toward the price: the confirmed fixes."""
+    return {k: eur for k, (eur, sure) in fix_ledger(b, policy, bundle).items() if sure}
+
+
+def maybe_fixes(b: dict, policy: Policy = DEFAULT_POLICY, bundle: bool = False) -> dict:
+    """{part: €} the listing leaves open: only in the worst-case price."""
+    return {k: eur for k, (eur, sure) in fix_ledger(b, policy, bundle).items() if not sure}
+
+
+def unconfirmed_flags(b: dict, maybe: dict) -> list[str]:
+    out = []
+    if "psu" in maybe:
+        psu = b["psu"]["v"]
+        out.append("psu_unstated" if b["psu"]["src"] == "assumed" else
+                   "psu_watts_unknown" if psu["trusted"] else "psu_brand_unknown")
+    if "ssd" in maybe:
+        out.append("ssd_unstated" if b["storage"]["src"] == "assumed" else "ssd_type_or_size_unknown")
+    if "cooler" in maybe:
+        out.append("cooler_unstated")
     return out
 
 
@@ -168,39 +221,64 @@ def ram_path(b: dict) -> dict:
     return {"to32": to32, "to64": to64}
 
 
+def _ai(b: dict) -> tuple:
+    gb, vram = b["ram_gb"]["v"], (b["gpu"] or {}).get("vram", 0)
+    return next(t for t in AI_TIERS if gb >= t[0] and vram >= t[1])
+
+
 def ai_tier(b: dict) -> str:
     """Brief §3: model version that runs on day one."""
-    gb, vram = b["ram_gb"]["v"], (b["gpu"] or {}).get("vram", 0)
-    if gb >= 96:
-        return "UD-IQ4 (headroom)"
-    if gb >= 64:
-        return "IQ3_S (ideal)"
-    if gb >= 48:
-        return "IQ2_XS (good, borderline fit)"
-    if gb >= 32 and vram >= 24:
-        return "IQ2_XS (good: 24 GB VRAM covers the gap)"
-    if gb >= 32:
-        return "Coder IQ1_M (good coding)"
-    return "none (needs RAM)"
+    return _ai(b)[2]
+
+
+def experts_on_cpu(b: dict) -> int:
+    """GB of the day-one model's experts that do not fit in VRAM: Strata computes them on
+    the CPU, where AVX-512 matters (Brief §4.1). 0 = everything fits on the GPU."""
+    return max(0, _ai(b)[3] + VRAM_RESERVE_GB - (b["gpu"] or {}).get("vram", 0))
+
+
+def intel_penalties(b: dict) -> list[str]:
+    """The Brief's two Intel objections, each only where it bites:
+    - no AVX-512, while part of the model runs on the CPU;
+    - a dead socket, under a CPU that is not already strong enough to keep."""
+    i, out = b["intel"], []
+    if not i["avx512"] and experts_on_cpu(b) > 0:
+        out.append("no_avx512_offload")
+    if not i["strong"]:
+        out.append("dead_socket")
+    return out
+
+
+def am5_swap(b: dict) -> int:
+    """€ to move an Intel PC onto AM5: board + CPU (+ DDR5 for DDR4) bought, Intel parts sold."""
+    i = b["intel"]
+    resale = INTEL_RESALE.get(i["socket"], 0) + (INTEL_RESALE_STRONG if i["strong"] else 0)
+    ram = 0
+    if b["ddr"] != 5:
+        gb = b["ram_gb"]["v"]
+        ram = (RAM_DDR5_2X32 if gb > 32 else RAM_DDR5_2X16) - gb * hardware.RAM_EUR_PER_GB[4]
+    return AM5_SWAP_BOARD + AM5_SWAP_CPU + ram - resale
 
 
 def tier(b: dict) -> int | None:
-    """Brief §6 tier, or None when no tier applies."""
+    """Brief §6 tier, or None when no tier applies. Intel ranks like AM5 when neither
+    Intel objection applies, tier 4 with one and tier 5 with both."""
     gpu, gb, platform = b["gpu"], b["ram_gb"]["v"], b["platform"]["v"]
     psu = b["psu"]["v"]
     if gpu["vendor"] == "nvidia" and gpu["vram"] >= 24:
         return 0
     if platform == "AM4":
         return 4 if gb >= 64 else 5   # 5: AM4 below the Brief's 64 GB, allowed by settings
-    if platform == "INTEL":
-        return 5                      # allowed by settings only: dead-end platform
-    if platform != "AM5":
+    if platform not in ("AM5", "INTEL"):
         return None
     if gb < 32:
-        return 3
-    if gpu["vendor"] == "nvidia" and gpu["vram"] >= 16 and psu["trusted"] and (psu["watts"] or 0) >= 750:
-        return 1
-    return 2
+        base = 3
+    elif gpu["vendor"] == "nvidia" and gpu["vram"] >= 16 and psu["trusted"] and (psu["watts"] or 0) >= 750:
+        base = 1
+    else:
+        base = 2
+    drawbacks = len(intel_penalties(b)) if platform == "INTEL" else 0
+    return max(base, 3 + drawbacks) if drawbacks else base
 
 
 def sort_key(l: dict) -> tuple:
@@ -210,7 +288,7 @@ def sort_key(l: dict) -> tuple:
     return (l["tier"], l["needs_answers"], -b["ram_gb"]["v"], b["gpu"]["vendor"] != "nvidia", -b["gpu"]["vram"],
             b["chipset"] == "A620", -(psu["trusted"] * 1000 + (psu["watts"] or 0)),
             b["ram_layout"]["v"][0] != 2, b["chipset"] not in PCIE5_CHIPSETS,
-            -((b["cpu"] or {}).get("tier") or 0), l["effective"])
+            -((b["cpu"] or {}).get("tier") or 0), l["budget"])
 
 
 def risk(desc: str, ad: dict) -> tuple[list[str], list[str]]:
@@ -253,10 +331,12 @@ def unknowns(b: dict) -> list[str]:
         out.append("psu")
     if b["storage"]["src"] == "assumed":
         out.append("storage")
-    if "cooler" in fixes(b) and b["cooler"]["src"] == "assumed":
+    if "cooler" in fix_ledger(b) and b["cooler"]["src"] == "assumed":
         out.append("cooler")
     if not b["case"]["name"]:
         out.append("case")
+    if (b.get("intel") or {}).get("raptor_lake"):
+        out.append("intel_bios")
     return out
 
 
@@ -270,6 +350,7 @@ QUESTIONS = {
     "storage": "Welche SSD ist verbaut (NVMe/M.2 oder SATA, Größe)?",
     "cooler": "Welcher CPU-Kühler ist verbaut?",
     "case": "Welches Gehäuse ist es (Modell), und wie lang darf die Grafikkarte sein?",
+    "intel_bios": "Ist das BIOS aktuell, mit Intels Microcode-Update 0x12B oder neuer (Stabilität 13./14. Generation)?",
 }
 
 
@@ -309,6 +390,15 @@ def price_reject(ask: int, desc: str, floor: int, share: float = DEFAULT_POLICY.
     return None
 
 
+def pickup_reject(rec: dict, policy: Policy) -> str | None:
+    """The user's filter on "Nur Abholung" listings: keep, keep only local ones, or drop."""
+    if not rec["pickup_only"] or policy.pickup_only == "keep":
+        return None
+    if policy.pickup_only == "drop":
+        return "pickup_only"
+    return None if rec["local"] else "pickup_only_not_local"
+
+
 def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None = None) -> dict:
     """One listing (search hit or detail) -> assessed record. `reject` is set when
     it fails; `special` for a §6.3 arbitrage case; `track` is "pc" or "bundle".
@@ -327,27 +417,31 @@ def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None =
     scam, cond = risk(desc, ad)
     if gpu_median and ask and ask < TOO_CHEAP * gpu_median:
         scam.append("too_cheap_vs_market")
+    pickup_only = attrs.get("Versand") == "Nur Abholung" or bool(PICKUP_ONLY_RE.search(desc.lower()))
     rec = {
         "ad_id": ad.get("id"), "url": ad.get("url"), "title": title, "ask": ask, "vb": vb,
         "location": ad.get("location"), "zip": ad.get("zip_code"), "posted": ad.get("start_date"),
         "seller_id": ad.get("seller_id"), "seller_rating": ad.get("seller_rating"), "local": bool(ad.get("local")),
-        "track": "bundle" if bundle else "pc",
-        "ships": attrs.get("Versand") == "Versand möglich" or bool(ad.get("shipping_options")),
+        "track": "bundle" if bundle else "pc", "pickup_only": pickup_only,
+        "ships": (attrs.get("Versand") == "Versand möglich" or bool(ad.get("shipping_options"))) and not pickup_only,
         "commercial": ad.get("seller_account_type") == "COMMERCIAL",
         "build": b, "scam": scam, "cond": cond, "description": desc, "full_text": "attributes" in ad,
         "reject": None, "special": False, "tier": None, "flags": [],
     }
     price = round(ask * (1 - policy.vb_discount)) if vb else ask
-    fx = fixes(b, policy, bundle)
-    rec.update(price=price, fixes=fx, effective=price + sum(fx.values()), path=ram_path(b),
-               ai=ai_tier(b), unknown=unknowns(b))
+    fx, maybe = fixes(b, policy, bundle), maybe_fixes(b, policy, bundle)
+    effective = price + sum(fx.values())
+    rec.update(price=price, fixes=fx, maybe_fixes=maybe, effective=effective, worst=effective + sum(maybe.values()),
+               budget=ask if policy.price_basis == "list" else effective, path=ram_path(b),
+               ai=ai_tier(b), unknown=unknowns(b), am5_swap=am5_swap(b) if b["intel"] else None)
     rec.update(needs_answers=bool(CRITICAL_UNKNOWNS & set(rec["unknown"])), featured=False,
                link=hardware.pcie_link(b) if b["gpu"] else None, headroom=hardware.headroom(b),
                gpu_note=hardware.card(b["gpu"]).note, parts_floor=hardware.parts_floor(b))
     rec["reject"] = (fatal or price_reject(ask, desc, rec["parts_floor"], policy.misprice_share)
-                     or hard_reject(b, policy) or ("scam_signals" if len(scam) >= policy.scam_signals_drop else None))
+                     or hard_reject(b, policy) or ("scam_signals" if len(scam) >= policy.scam_signals_drop else None)
+                     or pickup_reject(rec, policy))
     if (rec["reject"] or "").startswith("vram_under_") and not hard_reject(b, policy, ignore_vram=True) \
-            and b["ram_gb"]["v"] >= 48 and rec["effective"] + policy.fix_gpu <= policy.special_max:
+            and b["ram_gb"]["v"] >= 48 and rec["budget"] + policy.fix_gpu <= policy.special_max:
         rec["special"] = True
     if rec["reject"]:
         return rec
@@ -355,9 +449,9 @@ def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None =
     limit = policy.limit + (policy.stretch if t is not None and t <= 1 else 0)
     if t is None:
         rec["reject"] = "platform_unknown"
-    elif t == 4 and rec["effective"] > policy.am4_max:
+    elif t == 4 and b["platform"]["v"] == "AM4" and rec["budget"] > policy.am4_max:
         rec["reject"] = "am4_over_550"
-    elif rec["effective"] > limit:
+    elif rec["budget"] > limit:
         rec["reject"] = "over_budget"
     rec["tier"] = t
     rec["flags"] = _flags(rec, t, policy)
@@ -366,9 +460,9 @@ def assess(ad: dict, policy: Policy = DEFAULT_POLICY, gpu_median: float | None =
 
 def _flags(rec: dict, t: int | None, policy: Policy) -> list[str]:
     b, f = rec["build"], []
-    if rec["effective"] > policy.limit:
+    if rec["budget"] > policy.limit:
         f.append(f"stretch_over_{policy.limit}")
-    if t is not None and t <= 2 and rec["effective"] <= policy.target:
+    if t is not None and t <= 2 and rec["budget"] <= policy.target:
         f.append("act_fast")
     if b["chipset"] == "A620":
         f.append(f"a620_board_swap_later_{BOARD_SWAP_A620}")
@@ -378,8 +472,15 @@ def _flags(rec: dict, t: int | None, policy: Policy) -> list[str]:
         f.append("amd_gpu_secondary")
     if b["gpu"]["vram"] < 12:
         f.append("vram_below_brief")
-    if b["platform"]["v"] == "INTEL":
-        f.append("intel_platform_allowed")
+    if b["intel"]:
+        i = b["intel"]
+        f += [f"intel_{p}" for p in intel_penalties(b)]
+        f += [name for name, on in (("intel_cpu_strong", i["strong"]), ("intel_gen_assumed", i["gen_src"] == "assumed"),
+                                    ("lga1851_no_next_gen_cpus", i["socket"] == "LGA1851"),
+                                    ("raptor_lake_check_bios", i["raptor_lake"])) if on]
+    if rec["pickup_only"]:
+        f.append("pickup_only")
+    f += unconfirmed_flags(b, rec["maybe_fixes"])
     if not rec["full_text"]:
         f.append("preview_only")
     if b["ram_layout"]["v"][0] == 4:
@@ -396,16 +497,21 @@ def finalize(passed: list[dict], policy: Policy = DEFAULT_POLICY) -> list[dict]:
     - Tier 3 (16 GB) counts only if effective + the RAM step still beats the best
       tier 0-2 PC (Brief §6.3); otherwise it is flagged and not featured.
     - A listing that needs seller answers is featured only when the deal is good:
-      tier 0-1, or effective at or below the target."""
-    best = min((r["effective"] for r in passed if r["track"] == "pc" and r["tier"] <= 2), default=None)
+      tier 0-1, or a budget price at or below the target.
+    - An Intel PC gets the cost of moving it onto AM5, compared with the best AM5 deal."""
+    pcs = [r for r in passed if r["track"] == "pc" and r["tier"] <= 2]
+    best = min((r["budget"] for r in pcs), default=None)
+    best_am5 = min((r["budget"] for r in pcs if r["build"]["platform"]["v"] == "AM5"), default=None)
     out = []
     for r in sorted(passed, key=sort_key):
         flags, featured = list(r["flags"]), True
         if r["tier"] == 3 and best is not None:
-            beats = r["effective"] + RAM_DDR5_2X16 < best
+            beats = r["budget"] + RAM_DDR5_2X16 < best
             flags.append("beats_tier12_with_ram" if beats else "dominated_by_tier12")
             featured = beats
-        if r["needs_answers"] and not (r["tier"] <= 1 or r["effective"] <= policy.target):
+        if r["needs_answers"] and not (r["tier"] <= 1 or r["budget"] <= policy.target):
             featured = False
-        out.append({**r, "flags": flags, "featured": featured})
+        if r["am5_swap"] is not None and best_am5 is not None:
+            flags.append("am5_swap_beats_best_am5" if r["budget"] + r["am5_swap"] < best_am5 else "am5_swap_dearer")
+        out.append({**r, "flags": flags, "featured": featured, "best_am5": best_am5})
     return out

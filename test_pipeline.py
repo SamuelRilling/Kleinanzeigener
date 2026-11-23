@@ -75,8 +75,9 @@ def test_scan_end_to_end_offline(monkeypatch):
     cfg = config.Config(**{**cfg.__dict__, "terms": ("3060",), "bundles_enabled": False, "delay_s": 0})
     import asyncio
     result = asyncio.run(deals.scan(cfg, cache={}))
-    assert [r["ad_id"] for r in result["passed"]] == ["1"]
-    assert result["stats"]["rejects"] == {"intel_platform": 1} and result["stats"]["details"] == 2  # full text for all
+    assert [r["ad_id"] for r in result["passed"]] == ["1", "7"]            # the strong Intel CPU is judged, not dropped
+    assert result["stats"]["rejects"] == {} and result["stats"]["details"] == 2  # full text for all
+    assert "pickup_only" in result["passed"][1]["flags"]
     assert result["passed"][0]["seller_rating"] == 0.9
 
 
@@ -162,7 +163,7 @@ def test_reevaluate_applies_new_rules_without_api(tmp_path: Path, monkeypatch):
     folder = _saved_run(tmp_path, [{**HIT, "attributes": {}}, am4])
     cfg = config.load()
     strict = deals.reevaluate(folder, cfg)
-    assert [r["ad_id"] for r in strict["passed"]] == ["1"] and strict["stats"]["rejects"] == {"am4_under_32gb": 1}
+    assert [r["ad_id"] for r in strict["passed"]] == ["1"] and strict["stats"]["rejects"] == {"ddr4_under_32gb": 1}
     loose = deals.reevaluate(folder, config.Config(**{**cfg.__dict__, "policy": rules.Policy(am4_min_ram=16)}))
     assert {r["ad_id"] for r in loose["passed"]} == {"1", "5"} and loose["stats"]["review_of"] == folder.name
 
@@ -190,8 +191,11 @@ def test_reuse_skips_the_api_call(monkeypatch):
 
 def test_rules_changed_from_the_brief_are_listed():
     from policy import deviations
-    text = " ".join(deviations(rules.Policy(am4_min_ram=16, allow_intel=True)))
-    assert "AM4 allowed from 16 GB" in text and "Intel platforms allowed" in text and "exceed the limit" in text
+    text = " ".join(deviations(rules.Policy(am4_min_ram=16, price_basis="list", pickup_only="drop")))
+    assert "from 16 GB RAM" in text and "Intel judged case by case" in text and "exceed the limit" in text
+    assert "under 650 W" in text and "list price" in text and "pickup-only listings dropped" in text
+    assert "only when the listing confirms" in text
+    assert "Intel judged" not in " ".join(deviations(rules.Policy(allow_intel=False)))
 
 
 def test_results_tab_groups_and_rule_counts():

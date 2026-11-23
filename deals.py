@@ -145,13 +145,13 @@ def needs_detail(r: dict, policy: Policy) -> bool:
     if r["reject"].startswith("vram_under_"):   # an assumed 8 GB twin, or a §6.3 candidate
         return not r["build"]["gpu"]["vram_stated"] or r["build"]["ram_gb"]["v"] >= 48
     if r["reject"] == "over_budget":
-        return r["effective"] <= policy.limit + policy.stretch + OVER_BUDGET_DETAIL_SLACK
+        return r["budget"] <= policy.limit + policy.stretch + OVER_BUDGET_DETAIL_SLACK
     return True
 
 
 def detail_priority(r: dict) -> tuple:
     """Best provisional candidates first, so the max_details cap drops the weakest."""
-    return (bool(r["reject"]) and not r["special"], r["tier"] if r["tier"] is not None else 9, r["effective"])
+    return (bool(r["reject"]) and not r["special"], r["tier"] if r["tier"] is not None else 9, r["budget"])
 
 
 def load_seen() -> dict:

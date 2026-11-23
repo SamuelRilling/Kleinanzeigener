@@ -11,22 +11,30 @@ target_eur = 600              # tier 0-2 deals at or below this get "act_fast"
 stretch_eur = 75              # tier 0-1 (very good) deals may go this far over the limit
 am4_max_eur = 550             # cap for AM4 + 64 GB builds (tier 4)
 vb_discount = 0.10            # expected haggle on "VB" listings (0.05-0.15)
-special_max_eur = 800         # §6.3 special cases: effective + GPU fix must stay under this
+special_max_eur = 800         # §6.3 special cases: budget price + GPU fix must stay under this
+price_basis = "effective"     # price the limits are judged on: "effective" (VB haggle + confirmed fixes)
+                              # or "list" (the asking price as listed). Both are shown either way
 
 [rules]                       # what gets discarded (Target.md §2). Changes from the Brief are listed in every report
-am4_min_ram_gb = 32           # AM4 PCs need at least this much RAM (Brief: 64). 32-48 GB AM4 builds pass as
-                              # tier 5 (ranked last, normal limit). One of 16, 32, 48, 64
+am4_min_ram_gb = 32           # DDR4 platforms (AM4, DDR4 Intel) need at least this much RAM (Brief: AM4 64).
+                              # AM4 under 64 GB passes as tier 5 (ranked last). One of 16, 32, 48, 64
 min_vram_gb = 12              # smallest GPU VRAM kept (Brief: 12)
-allow_intel = false           # Intel platforms (Brief: reject; no AVX-512, no upgrade path). Allowed -> tier 5
+allow_intel = true            # Intel judged case by case (Brief: reject all). 10th gen and older rejected;
+                              # no AVX-512 counts only while the model spills to the CPU, the dead socket
+                              # only under a CPU that is not already strong. None: tier as AM5, one: 4, both: 5
 allow_arc = false             # Intel Arc GPUs (Brief: reject; Strata supports them on Linux only)
 allow_apu_x4 = false          # Ryzen 8500G/8300G (Brief: reject; GPU at PCIe 4.0 x4)
 allow_sff = false             # Mini-ITX / small cases (Brief: reject)
 allow_oem = false             # Dell/HP/Lenovo/... prebuilts (Brief: reject; proprietary parts)
 allow_mini_pc = false         # mini-PCs and handhelds (no GPU slot)
+pickup_only = "keep"          # "Nur Abholung / kein Versand": "keep" (flag only), "local_only", or "drop"
 misprice_share = 0.5          # ask below this share of what its GPU + RAM alone are worth = mispriced (0 = off)
 scam_signals_drop = 2         # this many scam signals drop a listing
 
-[fixes]                       # € added to the price for missing parts (Target.md §5)
+[fixes]                       # € added to the price for missing parts (Target.md §5), only when the listing
+                              # confirms the part is missing or weak; unmentioned parts are flagged instead
+psu_min_w = 650               # a stated PSU under this is a counted fix (Brief: 750)
+psu_min_24gb_w = 850          # the same for a 24 GB card
 psu_eur = 95                  # 750 W Gold PSU
 psu_24gb_eur = 120            # 850 W Gold, for a 24 GB card
 cooler_eur = 30               # tower cooler for a 105 W+ CPU

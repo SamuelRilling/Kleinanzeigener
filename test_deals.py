@@ -50,8 +50,8 @@ def test_gpu_vram(title, vram, stated):
     ("Ryzen 7 8700G", "AM5", "8700"),
     ("Ryzen 5 5600X", "AM4", "5600"),
     ("Gaming Pc Amd 9700X", "AM5", "9700"),
-    ("i7-12700K RTX 3060", "INTEL", None),
-    ("Core Ultra 7 265K", "INTEL", None),
+    ("i7-12700K RTX 3060", "INTEL", "12700"),
+    ("Core Ultra 7 265K", "INTEL", "265"),
     ("Ryzen 7 Gaming PC", None, None),
 ])
 def test_cpu_platform(title, platform, model):
@@ -139,20 +139,21 @@ def test_tier1_passes_with_vb_price():
     assert r["path"] == {"to32": 0, "to64": rules.RAM_DDR5_2X16} and r["unknown"] == []
 
 
-def test_unknown_parts_are_priced_not_rejected():
+def test_unmentioned_parts_are_flagged_not_priced():
     r = rules.assess({**GOOD, "description": "Top Zustand", "price_type": "FIXED", "price_amount": 450})
-    assert r["reject"] is None
-    assert r["fixes"] == {"psu": rules.DEFAULT_POLICY.fix_psu, "ssd": rules.DEFAULT_POLICY.fix_ssd}
+    assert r["reject"] is None and r["fixes"] == {} and r["effective"] == 450
+    assert r["maybe_fixes"] == {"psu": rules.DEFAULT_POLICY.fix_psu, "ssd": rules.DEFAULT_POLICY.fix_ssd}
+    assert r["worst"] == 450 + 95 + 90 and {"psu_unstated", "ssd_unstated"} <= set(r["flags"])
     assert r["tier"] == 2  # 16 GB card, but the PSU is unverified -> not tier 1
     assert r["build"]["ram_layout"] == {"v": (4, 8), "src": "assumed"}  # worst case for "32 GB"
     assert {"ram_layout", "board", "psu", "storage", "case"} <= set(r["unknown"]) and not r["needs_answers"]
 
 
 @pytest.mark.parametrize("title, reason", [
-    ("PC i7-12700K RTX 3060 32GB", "intel_platform"),
+    ("PC i7-9700K RTX 3060 32GB", "intel_old"),
     ("PC Ryzen 5 7600 RTX 3070 32GB", "vram_under_12gb"),
     ("PC Ryzen 5 7600 RTX 4060 Ti 32GB", "vram_under_12gb"),   # VRAM unstated -> 8 GB
-    ("PC Ryzen 5 5600X RTX 3060 16GB", "am4_under_32gb"),
+    ("PC Ryzen 5 5600X RTX 3060 16GB", "ddr4_under_32gb"),
     ("PC Ryzen 5 8500G RTX 3060 32GB DDR5", "apu_pcie_x4"),
     ("Mini-ITX PC Ryzen 5 7600 RTX 3060 32GB", "itx_or_sff"),
     ("PC Ryzen 5 7600 Arc B580 32GB", "intel_arc"),
@@ -164,12 +165,12 @@ def test_hard_rejects(title, reason):
 def test_am4_64gb_is_tier4_under_550():
     r = rules.assess({"title": "Ryzen 7 5700X RTX 3060 12GB 64GB DDR4 B550", "description": "",
                       "price_amount": 300, "image_count": 3})
-    assert r["reject"] is None and r["tier"] == 4 and r["effective"] == 300 + rules.DEFAULT_POLICY.fix_psu + rules.DEFAULT_POLICY.fix_ssd
+    assert r["reject"] is None and r["tier"] == 4 and r["effective"] == 300 and r["worst"] == 300 + 95 + 90
 
 
 def test_3090_jumps_to_tier0_and_may_stretch():
     r = rules.assess({"title": "Ryzen 7 7700 RTX 3090 32GB DDR5", "description": "",
-                      "price_amount": 560, "image_count": 3})
+                      "price_amount": 740, "image_count": 3})
     assert r["tier"] == 0 and r["reject"] is None and "stretch_over_700" in r["flags"]
 
 

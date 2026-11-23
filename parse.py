@@ -47,8 +47,11 @@ GPUS = [
 OPTIMISTIC_VRAM = {"RTX 3060": 12}   # Priming 6.2: assume 12 GB but flag; every other twin: assume the smaller
 VRAM_AFTER_RE = re.compile(r"^[\s,/()\-:]*(?:MIT\s+)?(\d{1,2})\s*G(?:B)?(?![A-Z])")
 
-INTEL_RE = re.compile(r"(?<!\w)(?:CORE\s*)?I[3579][\s-]?\d{4,5}|(?<!\w)ULTRA\s*[3579][\s-]*2\d\d|\bXEON\b|\bPENTIUM\b|\bCELERON\b")
-INTEL_TIER_RE = re.compile(r"(?<!\w)(?:CORE\s*)?I[3579](?!\d)")
+INTEL_CORE_RE = re.compile(r"(?<!\w)(?:CORE\s*)?I([3579])[\s-]?(\d{4,5})([A-Z]{0,2})(?![A-Z0-9])")
+INTEL_ULTRA_RE = re.compile(r"(?<!\w)(?:CORE\s*)?ULTRA\s*([3579])[\s-]*(2\d\d)([A-Z]{0,2})(?![A-Z0-9])")
+INTEL_BUDGET_RE = re.compile(r"\b(?:XEON|PENTIUM|CELERON)\b")
+ULTRA_GEN = 15   # Core Ultra 200 (Arrow Lake, LGA1851), counted as the generation after 14
+INTEL_TIER_RE = re.compile(r"(?<!\w)(?:CORE\s*)?I([3579])(?!\d)")
 RYZEN_RE = re.compile(r"(?<!\w)(?:RYZEN\s*([3579])?|R([3579]))[\s-]*([1-9]\d{3})\s*(X3D|XT|X|GT|G|F)?(?!\w)")
 RYZEN_BARE_RE = re.compile(r"(?<![\w-])([1-9]\d{3})(X3D|X|G|F)(?!\w)")
 RYZEN_TIER_RE = re.compile(r"(?<!\w)RYZEN\s*([3579])(?![\d])")
@@ -146,32 +149,53 @@ def parse_gpu(title: str, desc: str) -> dict | None:
             "in_desc": clause != cls[0], "conflict": len({h[2][0] for _, h in hits}) > 1}
 
 
-def _cpu_hits(clause: str) -> list[dict]:
+def _intel(label: str, model: str | None, suffix: str, tier: int | None, gen: int | None) -> dict:
+    """gen: Core generation (15 = Core Ultra 200), 0 = Xeon/Pentium/Celeron, None = not stated."""
+    return {"label": label, "model": model, "suffix": suffix, "tier": tier, "platform": "INTEL", "gen": gen}
+
+
+def _intel_hits(clause: str) -> list[tuple]:
+    """(start, end, cpu) for every installed Intel CPU in one clause."""
     hits = []
+    for m in INTEL_CORE_RE.finditer(clause):
+        tier, model, suffix = int(m.group(1)), m.group(2), m.group(3)
+        gen = int(model[:2]) if len(model) == 5 else int(model[0])
+        hits.append((m, _intel(f"Core i{tier}-{model}{suffix}", model, suffix, tier, gen)))
+    for m in INTEL_ULTRA_RE.finditer(clause):
+        tier, model, suffix = int(m.group(1)), m.group(2), m.group(3)
+        hits.append((m, _intel(f"Core Ultra {tier} {model}{suffix}", model, suffix, tier, ULTRA_GEN)))
+    for m in INTEL_BUDGET_RE.finditer(clause):
+        hits.append((m, _intel(m.group(0).title(), None, "", None, 0)))
+    return [(m.start(), m.end(), cpu) for m, cpu in hits if installed(clause, m.start(), m.end())]
+
+
+def _cpu_hits(clause: str) -> list[dict]:
+    intel = _intel_hits(clause)
+    hits = [(start, cpu) for start, _, cpu in intel]
     for rx, bare in ((RYZEN_RE, False), (RYZEN_BARE_RE, True)):
         for m in rx.finditer(clause):
-            if not installed(clause, m.start(), m.end()):
+            inside_intel = any(s <= m.start() < e for s, e, _ in intel)   # "i5 9400F" is not a Ryzen 9400F
+            if inside_intel or not installed(clause, m.start(), m.end()):
                 continue
             model, suffix = (m.group(1), m.group(2)) if bare else (m.group(3), m.group(4) or "")
             tier = None if bare else int(m.group(1) or m.group(2) or 0) or None
             tier = tier or (3 if model[1] <= "3" else 5 if model[1] <= "6" else 7 if model[1] <= "8" else 9)
             hits.append((m.start(), {"label": f"Ryzen {tier} {model}{suffix}", "model": model, "suffix": suffix,
                                      "tier": tier, "platform": "AM5" if model[0] in "789" else "AM4"}))
-    for m in INTEL_RE.finditer(clause):
-        if installed(clause, m.start(), m.end()):
-            hits.append((m.start(), {"label": "Intel", "model": None, "suffix": "", "tier": None, "platform": "INTEL"}))
     return [h for _, h in sorted(hits, key=lambda h: h[0])]
 
 
 def parse_cpu(title: str, desc: str) -> dict | None:
-    """{label, platform (AM5/AM4/INTEL/None), model, suffix, tier, conflict} or None."""
+    """{label, platform (AM5/AM4/INTEL/None), model, suffix, tier, conflict} or None;
+    Intel CPUs also carry `gen`."""
     cls = clauses(title, desc)
     hits = [h for c in by_priority(cls, "cpu") for h in _cpu_hits(c)]
     if hits:
         return {**hits[0], "conflict": len({h["label"] for h in hits}) > 1}
     text = "\n".join(cls)
-    if INTEL_TIER_RE.search(text):
-        return {"label": "Intel", "platform": "INTEL", "model": None, "suffix": "", "tier": None, "conflict": False}
+    if m := INTEL_TIER_RE.search(text):
+        tier = int(m.group(1))
+        return {**_intel(f"Core i{tier} (gen?)", None, "", tier, None), "conflict": False}
     if m := RYZEN_TIER_RE.search(text):
         return {"label": f"Ryzen {m.group(1)} (gen?)", "platform": None, "model": None, "suffix": "",
                 "tier": int(m.group(1)), "conflict": False}
